@@ -11,36 +11,15 @@ from torch.distributions.categorical import Categorical
 from tqdm import tqdm
 from dataclasses import dataclass
 import einops
+from abc import ABC, abstractmethod
+import matplotlib.pyplot as plt
 
-from transformer import SmallModel
+from transformer import Config, SmallModel, TimeAwareTransformer
 
-# %%
-
-@dataclass
-class Config:
-    num_tokens: int = 20                        # number of tokens in the vocabulary
-    embed_dim: int = 16                         # dimension of the embedding
-    mlp_dim: int = 32                           # dimension of the MLP
-    frequency_embedding_dim: int = 32           # dimension of the frequency embedding
-    num_heads: int = 4                          # number of heads in the attention
-    head_dim: int = 4                           # dimension of each head
-    context_len: int = 1024                     # maximum length of the context
-    num_layers: int = 6                         # number of layers in the transformer
-    timestep_scale: float = 1000.0              # how much to scale the timestep embedding
-    debug: bool = False                         # whether to print debug information
-    device: str = "cuda" \
-        if torch.cuda.is_available() \
-        else "cpu"                              # device to use
-    num_input_tokens: int = None                # number of input tokens, can be different from num_tokens (useful for masking, etc.)
-    add_residual: bool = False                  # whether to add a residual term to the weight scheduler
-
-    def __post_init__(self):
-        if self.num_input_tokens is None:
-            self.num_input_tokens = self.num_tokens
 
 # %%
 
-class Kappa():
+class Kappa(ABC):
     """
     Returns the weight of a conditional probability
 
@@ -56,9 +35,11 @@ class Kappa():
     def __init__(self, config: Config):
         self.config = config
 
+    @abstractmethod
     def __call__(self, t) -> torch.Tensor:
         pass
 
+    @abstractmethod
     def derivative(self, t) -> torch.Tensor:
         pass
 
@@ -87,7 +68,7 @@ class ResidualKappa(Kappa):
         return torch.ones_like(t) - sum(kappa(t) for kappa in self.kappas)
 
     def derivative(self, t) -> torch.Tensor:
-        return -1 * sum(kappa.derivative(t) for kappa in self.kappas)
+        return -1 * sum([kappa.derivative(t) for kappa in self.kappas])
 
 class WeightScheduler():
     """
@@ -177,11 +158,12 @@ test_weight_scheduler()
 Need to implement conditional samplers
 """
 
-class Sampler():    
+class Sampler(ABC):    
     def __init__(self, config: Config):
         self.config = config
 
-    def sample(self, x0, x1):
+    @abstractmethod
+    def sample(self, x0, x1) -> torch.Tensor:
         # x0 : (bs, c) or (...)
         # x1 : (bs, c) or (...)
         pass
@@ -209,15 +191,15 @@ class DataSampler(Sampler):
 
 # %%
 
-class CorrectorScheduler():
+class CorrectorScheduler(ABC):
     """
-    function that returnt the weight of the forward velocity
+    function that returns the weight of the forward velocity
     """
     def __init__(self, config: Config):
         self.config = config
 
     def __call__(self, t):
-        return self.ones_like(t)
+        return torch.ones_like(t)
 
 class PolynomialCorrectorScheduler(CorrectorScheduler):
     """
@@ -239,12 +221,14 @@ class GeneralFlow():
     """
     General flow model
     """
-    def __init__(self, config: Config, model: nn.Module, samplers: list[Sampler], weight_scheduler: WeightScheduler, corrector_scheduler: CorrectorScheduler = CorrectorScheduler()):
+    def __init__(self, config: Config, model: nn.Module, samplers: list[Sampler], weight_scheduler: WeightScheduler, corrector_scheduler: CorrectorScheduler = None):
         self.config = config
         self.weight_scheduler = weight_scheduler
         self.model = model
         self.samplers = samplers
         self.corrector_scheduler = corrector_scheduler
+        if self.corrector_scheduler is None:
+            self.corrector_scheduler = CorrectorScheduler(config)
         assert self.config.output_channels == self.weight_scheduler.m, f"output_channels must match the number of kappas"
         assert len(self.samplers) == self.weight_scheduler.m, f"number of samplers must match the number of kappas"
 
@@ -266,18 +250,27 @@ class GeneralFlow():
 
         t = t.to(x0.device)
 
-        samples = torch.stack([
+        path_samples = torch.stack([
             sampler.sample(x0, x1) for sampler in self.samplers
         ], dim=-1) # (bs, c, m)
-        weights = self.weight_scheduler(t) # (bs, m)
-        xt = torch.einsum("bm,bcm->bc", weights, samples) # (bs, c)
+        weights = self.weight_scheduler(t).unsqueeze(1).expand(-1, self.config.context_len, -1) # (bs, c, m)
+        which_probability_path = Categorical(weights).sample() # (bs, c)
+        # some advanced indexing shenanigans to sample each token of xt from
+        # path_samples according to the weights distribution
+        xt = path_samples[
+            torch.arange(0, path_samples.shape[0]).unsqueeze(-1).expand(-1, path_samples.shape[1]), # (bs, c)
+            torch.arange(0, path_samples.shape[1]).unsqueeze(0).expand(path_samples.shape[0], -1), # (bs, c)
+            which_probability_path # (bs, c)
+            ]
         logits = self.model(xt, t) # (bs, sequence_length, output_channels, num_tokens)
-        loss = F.cross_entropy(einops.rearrange(logits, "bs c m s -> bs s c m"), samples, reduction='mean')
+        loss = F.cross_entropy(einops.rearrange(logits, "bs c m s -> bs s c m"), path_samples, reduction='mean')
         return loss
 
     def forward_velocity(self, x, t):
         # x : (bs, c)
         # t : (1,)
+        if t.dim() == 0:
+            t = t.unsqueeze(0)
         # returns (bs, c, s): get the velocity to each token
         logits = self.model(x, t) # (bs, c, m, s)
         probs = F.softmax(logits, dim=-1) # (bs, c, m, s)
@@ -293,6 +286,8 @@ class GeneralFlow():
     def backward_velocity(self, x, t):
         # x : (bs, c)
         # t : (1,)
+        if t.dim() == 0:
+            t = t.unsqueeze(0)
         # returns (bs, c, s): get the velocity to each token
         logits = self.model(x, t) # (bs, c, m, s)
         probs = F.softmax(logits, dim=-1) # (bs, c, m, s)
@@ -314,11 +309,254 @@ class GeneralFlow():
         alpha_t = self.corrector_scheduler(t)
         return alpha_t * self.forward_velocity(x, t) - alpha_t * self.backward_velocity(x, t)
 
-    def forward_euler_step(self, x, t, dt = None):
+    def forward_euler_step(self, xt, t, dt = None):
         if dt is None:
             dt = getattr(self.config, "dt", 1e-3)
         # x : (bs, c) or (...)
         # t : (1,)
         # dt : (1,)
+        v = self.forward_velocity(xt, t) # (bs, c, s)
+        diag = F.one_hot(xt, self.config.num_tokens) # (bs, c, s)
+        probs = (diag + dt * v).clip(min=0.0) # (bs, c, s)
+        xtdt = Categorical(probs).sample() # (bs, c)
+        return xtdt
 
-        logits = self.model(x, t) # (bs, c, m, s)
+    def backward_euler_step(self, xt, t, dt = None):
+        if dt is None:
+            dt = getattr(self.config, "dt", 1e-3)
+        v = self.backward_velocity(xt, t) # (bs, c, s)
+        diag = F.one_hot(xt, self.config.num_tokens) # (bs, c, s)
+        probs = (diag - dt * v).clip(min=0.0) # (bs, c, s) - negative due to backward velocity definition
+        xtdt = Categorical(probs).sample() # (bs, c)
+        return xtdt
+
+    def corrector_sampling_euler_step(self, xt, t, dt = None):
+        if dt is None:
+            dt = getattr(self.config, "dt", 1e-3)
+        v = self.corrector_sampling_velocity(xt, t) # (bs, c, s)
+        diag = F.one_hot(xt, self.config.num_tokens) # (bs, c, s)
+        probs = (diag + dt * v).clip(min=0.0) # (bs, c, s)
+        xtdt = Categorical(probs).sample() # (bs, c)
+        return xtdt
+
+    def corrector_iteration_euler_step(self, xt, t, dt = None):
+        if dt is None:
+            dt = getattr(self.config, "dt", 1e-3)
+        v = self.corrector_iteration_velocity(xt, t) # (bs, c, s)
+        diag = F.one_hot(xt, self.config.num_tokens) # (bs, c, s)
+        probs = (diag + dt * v).clip(min=0.0) # (bs, c, s)
+        xtdt = Categorical(probs).sample() # (bs, c)
+        return xtdt
+    
+    def forward_sample(self, x0, dt = None):
+        if dt is None:
+            dt = getattr(self.config, "dt", 1e-3)
+        t = torch.tensor(0.)
+        x = x0.clone()
+        while t < 1:
+            x = self.forward_euler_step(x, t, dt)
+            t += dt
+        return x
+
+    def corrector_sample(self, x0, dt = None):
+        if dt is None:
+            dt = getattr(self.config, "dt", 1e-3)
+        t = torch.tensor(1e-6) # start away from 0 so backward velocity is defined
+        x = x0.clone()
+        while t < 1:
+            x = self.corrector_sampling_euler_step(x, t, dt)
+            t += dt
+        return x
+    
+
+# %%
+
+def basic_uniform_noise_sampler(bs, device='cpu'):
+    return torch.randint(0, 3, (bs, 10), device=device)
+
+def basic_mask_sampler(bs, device='cpu', mask_token = 3):
+    return torch.full((bs, 10), mask_token, dtype=torch.long, device=device)
+
+def basic_data_sampler(bs, device='cpu'):
+    # increasing tensors with 0, 1 and 2
+    pos1 = torch.randint(0, 11, (bs,), device = device) # (bs,)
+    onehot1 = F.one_hot(pos1, num_classes = 11) # (bs, 11)
+    cumsum1 = onehot1.cumsum(dim=-1) # (bs, 11)
+    r1 = cumsum1[:, :-1] # (bs, 10)
+
+    pos2 = torch.randint(0, 11, (bs,), device = device) # (bs,)
+    onehot2 = F.one_hot(pos2, num_classes = 11) # (bs, 11)
+    cumsum2 = onehot2.cumsum(dim=-1) # (bs, 11)
+    r2 = cumsum2[:, :-1] # (bs, 10)
+
+    return r1 + r2
+
+# %%
+
+print(basic_uniform_noise_sampler(20))
+print('-'*100)
+print(basic_mask_sampler(20))
+print('-'*100)
+print(basic_data_sampler(20))
+
+# %%
+
+def test_general_flow():
+    config = Config(
+        num_tokens = 3,
+        context_len = 10,
+        add_residual=True,
+        output_channels = 2
+        )
+    kappa1 = LinearKappa(config)
+    weight_scheduler = WeightScheduler(config, kappa1) # 2 kappas
+    samplers = [
+        DataSampler(config),
+        NoiseSampler(config)
+    ]
+    model = TimeAwareTransformer(config)
+    gf = GeneralFlow(
+        config=config,
+        model=model,
+        samplers=samplers,
+        weight_scheduler=weight_scheduler
+    )
+    x = torch.randint(0, 3, (5, 10))
+    t = torch.tensor(0.3)
+    fv = gf.forward_velocity(x, t)
+    print(fv.shape)
+    print(fv.sum(dim = -1).abs().max()) # should be small
+    bv = gf.backward_velocity(x, t)
+    print(bv.shape)
+    print(bv.sum(dim = -1).abs().max()) # should be small
+    cv = gf.corrector_sampling_velocity(x, t)
+    print(cv.shape)
+    print(cv.sum(dim = -1).abs().max()) # should be small
+    print(cv)
+
+
+# %%
+
+test_general_flow()
+
+# %%
+
+def small_uniform_train():
+    config = Config(
+        num_tokens = 3,
+        context_len = 10,
+        add_residual=True,
+        output_channels = 2
+        )
+    kappa1 = LinearKappa(config)
+    weight_scheduler = WeightScheduler(config, kappa1) # 2 kappas
+    samplers = [
+        DataSampler(config),
+        NoiseSampler(config)
+    ]
+    model = TimeAwareTransformer(config)
+    gf = GeneralFlow(
+        config=config,
+        model=model,
+        samplers=samplers,
+        weight_scheduler=weight_scheduler
+    )
+    opt = torch.optim.AdamW(model.parameters(), lr = 1e-4, weight_decay=0)
+    bs = 32
+    num_epochs = 5000
+    device = config.device
+    wrapper = tqdm(range(num_epochs))
+    losses = []
+    last_100 = []
+    for epoch in wrapper:
+        x0 = basic_uniform_noise_sampler(bs, device)
+        x1 = basic_data_sampler(bs, device)
+        t = torch.rand((bs,), device=device)
+        loss = gf.get_train_loss(x0, x1, t)
+        loss.backward()
+        opt.step()
+        wrapper.set_postfix_str(f"loss: {loss}")
+        # print(loss)
+        losses.append(loss)
+        last_100.append(loss)
+        if (epoch + 1) % 100 == 0:
+            print(f"mean of 100 losses: {sum(last_100) / 100}")
+            last_100.clear()
+
+    # plt.plot(losses)
+    x0 = basic_uniform_noise_sampler(bs, device)
+    print(gf.forward_sample(x0))
+
+# %%
+small_uniform_train()
+# %%
+
+def small_mask_train():
+    config = Config(
+        num_tokens = 4,
+        context_len = 10,
+        add_residual=True,
+        output_channels = 2
+        )
+    kappa1 = LinearKappa(config)
+    weight_scheduler = WeightScheduler(config, kappa1) # 2 kappas
+    samplers = [
+        DataSampler(config),
+        NoiseSampler(config)
+    ]
+    model = TimeAwareTransformer(config)
+    gf = GeneralFlow(
+        config=config,
+        model=model,
+        samplers=samplers,
+        weight_scheduler=weight_scheduler
+    )
+    bs = 32
+    num_epochs = 10000
+    device = config.device
+    wrapper = tqdm(range(num_epochs))
+    opt = torch.optim.AdamW(model.parameters(), lr = 1e-4, weight_decay=0)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=num_epochs, eta_min=1e-6)
+    losses = []
+    last_100 = []
+    for epoch in wrapper:
+        x0 = basic_mask_sampler(bs, device)
+        x1 = basic_data_sampler(bs, device)
+        t = torch.rand((bs,), device=device)
+        loss = gf.get_train_loss(x0, x1, t)
+        loss.backward()
+        opt.step()
+        scheduler.step()
+        wrapper.set_postfix_str(f"loss: {loss:.4f}, lr: {scheduler.get_last_lr()[0]:.4f}")
+        # print(loss)
+        losses.append(loss.detach())
+        last_100.append(loss)
+        if (epoch + 1) % 100 == 0:
+            print(f"mean of 100 losses: {sum(last_100) / 100:.4f}")
+            last_100.clear()
+
+    plt.plot(losses, label='loss')
+    plt.show()
+    x0 = basic_mask_sampler(bs, device)
+    print(gf.forward_sample(x0))
+
+    return model, gf
+
+# %%
+model, gf = small_mask_train()
+# %%
+
+x = basic_mask_sampler(32, 'cpu')
+for _ in range(10000):
+    x = gf.corrector_iteration_euler_step(x, torch.tensor(0.5), 1e-4)
+
+print(x)
+
+# %%
+
+x = basic_mask_sampler(32, 'cpu')
+x = gf.corrector_sample(x, dt = 1e-4)
+
+print(x)
+
+# %%

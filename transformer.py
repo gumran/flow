@@ -31,6 +31,8 @@ class Config:
         else "cpu"                              # device to use
     num_input_tokens: int = None                # number of input tokens, can be different from num_tokens (useful for masking, etc.)
     output_channels: int = 1                    # number of channels in the output
+    add_residual: bool = False                  # add a residual kappa
+    debug: bool = False                         # debug readouts
 
     def __post_init__(self):
         if self.num_input_tokens is None:

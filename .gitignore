@@ -1,0 +1,98 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+pip-wheel-metadata/
+*.whl
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pyright
+typings/
+
+# VSCode
+.vscode/
+
+# Mac files
+.DS_Store
+
+# Editor files
+*.swp
+*~
+.idea/
+
+# Other
+*.log
+
+# Uv specific:
+.uv/
+.uv-cache/
+.uvloop/
+uv.config.json
+uv.dependencies.json
+
+# Data, results, outputs
+*.out
+*.err
+
+# Ignore datasets that could be downloaded/generated
+data/
+datasets/
+outputs/
+results/
+
+# Ignore wandb logs and other experiment tracking
+wandb/
+logs/
+

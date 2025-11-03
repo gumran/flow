@@ -13,30 +13,7 @@ from torch.distributions.categorical import Categorical
 from tqdm import tqdm
 from dataclasses import dataclass
 
-from transformer import SmallModel
-
-# %%
-
-@dataclass
-class Config:
-    num_tokens: int = 20                        # number of tokens in the vocabulary
-    embed_dim: int = 16                         # dimension of the embedding
-    mlp_dim: int = 32                           # dimension of the MLP
-    frequency_embedding_dim: int = 32           # dimension of the frequency embedding
-    num_heads: int = 4                          # number of heads in the attention
-    head_dim: int = 4                           # dimension of each head
-    context_len: int = 1024                     # maximum length of the context
-    num_layers: int = 6                         # number of layers in the transformer
-    timestep_scale: float = 1000.0              # how much to scale the timestep embedding
-    debug: bool = False                         # whether to print debug information
-    device: str = "cuda" \
-        if torch.cuda.is_available() \
-        else "cpu"                              # device to use
-    num_input_tokens: int = None                # number of input tokens, can be different from num_tokens (useful for masking, etc.)
-
-    def __post_init__(self):
-        if self.num_input_tokens is None:
-            self.num_input_tokens = self.num_tokens
+from flow.transformer import SmallModel, Config
 
 # %%
 
@@ -129,7 +106,8 @@ def test_masked_model():
 
 # %%
 
-test_masked_model()
+if __name__ == "__main__":
+    test_masked_model()
 
 # %%
 
@@ -226,6 +204,7 @@ def test_uniform_model():
 
 # %%
 
-test_uniform_model()
+if __name__ == "__main__":
+    test_uniform_model()
 
 # %%

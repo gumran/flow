@@ -14,7 +14,7 @@ import einops
 from abc import ABC, abstractmethod
 import matplotlib.pyplot as plt
 
-from transformer import Config, SmallModel, TimeAwareTransformer
+from flow.transformer import Config, SmallModel, TimeAwareTransformer
 
 
 # %%
@@ -151,7 +151,8 @@ def test_weight_scheduler():
 
 # %%
 
-test_weight_scheduler()
+if __name__ == "__main__":
+    test_weight_scheduler()
 # %%
 
 """
@@ -393,11 +394,12 @@ def basic_data_sampler(bs, device='cpu'):
 
 # %%
 
-print(basic_uniform_noise_sampler(20))
-print('-'*100)
-print(basic_mask_sampler(20))
-print('-'*100)
-print(basic_data_sampler(20))
+if __name__ == "__main__":
+    print(basic_uniform_noise_sampler(20))
+    print('-'*100)
+    print(basic_mask_sampler(20))
+    print('-'*100)
+    print(basic_data_sampler(20))
 
 # %%
 
@@ -437,7 +439,8 @@ def test_general_flow():
 
 # %%
 
-test_general_flow()
+if __name__ == "__main__":
+    test_general_flow()
 
 # %%
 
@@ -488,7 +491,8 @@ def small_uniform_train():
     print(gf.forward_sample(x0))
 
 # %%
-small_uniform_train()
+if __name__ == "__main__":
+    small_uniform_train()
 # %%
 
 def small_mask_train():
@@ -543,20 +547,22 @@ def small_mask_train():
     return model, gf
 
 # %%
-model, gf = small_mask_train()
-# %%
+if __name__ == "__main__":
+    model, gf = small_mask_train()
+    # %%
 
-x = basic_mask_sampler(32, 'cpu')
-for _ in range(10000):
-    x = gf.corrector_iteration_euler_step(x, torch.tensor(0.5), 1e-4)
+    x = basic_mask_sampler(32, 'cpu')
+    for _ in range(10000):
+        x = gf.corrector_iteration_euler_step(x, torch.tensor(0.5), 1e-4)
 
-print(x)
+    print(x)
 
-# %%
+    # %%
 
-x = basic_mask_sampler(32, 'cpu')
-x = gf.corrector_sample(x, dt = 1e-4)
+if __name__ == "__main__":
+    x = basic_mask_sampler(32, 'cpu')
+    x = gf.corrector_sample(x, dt = 1e-4)
 
-print(x)
+    print(x)
 
 # %%

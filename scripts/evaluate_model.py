@@ -10,10 +10,12 @@ from torch.utils.data import DataLoader, Dataset
 from datasets import load_dataset, load_from_disk
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+
 
 from flow.transformer import TimeAwareTransformer, Config
 from flow.campbell_flow import MaskedFMModel, UniformFMModel
-from flow.general_flow import UsualMaskedFlow
+from flow.general_flow import UsualFlow
 
 # %%
 tokenizer = AutoTokenizer.from_pretrained("roberta-base")
@@ -57,7 +59,7 @@ torch.cuda.manual_seed(config.seed)
 torch.cuda.manual_seed_all(config.seed)
 # %%
 
-dataset_path = "/scratch/inath/datasets/tinystories_1_dataset"
+dataset_path = "/scratch/inath/datasets/tinystories_10_dataset"
 ds = load_from_disk(dataset_path)
 print(ds)
 # %%
@@ -67,16 +69,84 @@ print(tokenizer.decode(ds['input_ids'][0]))
 
 # %%
 
-model_path = "/scratch/inath/checkpoints/tinystories_general_flow_1_model.pt"
+model_path = "/scratch/inath/checkpoints/tinystories_general_flow_10_model.pt"
 model = TimeAwareTransformer(config)
 model.load_state_dict(torch.load(model_path))
 model.to(config.device)
 model.eval()
-gf = UsualMaskedFlow(config, model)
+gf = UsualFlow(config, model)
 # %%
 
 with torch.no_grad():
-    x0 = torch.full((1, 384), tokenizer.mask_token_id, device=config.device)
+    x0 = torch.full((20, 384), tokenizer.mask_token_id, device=config.device)
     output = gf.forward_sample(x0)
-    print(tokenizer.decode(output[0]))
+# %%
+
+for i in range(20):
+    print(tokenizer.decode(output[i]))
+    print("-"*100)
+# %%
+
+with torch.no_grad():
+    x0 = torch.full((20, 384), tokenizer.mask_token_id, device=config.device)
+    bad_output = gf.forward_sample(x0, dt = 1e-2)
+# %%
+
+for i in range(20):
+    print(tokenizer.decode(bad_output[i]))
+    print("-"*100)
+# %%
+x0 = torch.full((20, 384), tokenizer.mask_token_id, device=config.device)
+logits = model(x0, torch.tensor([0.0], device=config.device))
+
+def analyze_logits(logits, token_id):
+    logits_values = logits[0, token_id, 0, :].detach().cpu().numpy()
+    plt.figure(figsize=(10, 6))
+    plt.hist(logits_values, bins=50)
+    plt.title("Histogram of Logits")
+    plt.xlabel("Logit Value")
+    plt.ylabel("Frequency")
+    plt.yscale("log")
+    plt.show()
+
+    topk = 20
+    logits_vector = logits[0, token_id, 0, :]
+    top_logits, top_indices = torch.topk(logits_vector, topk)
+    print("Top 20 logits and their token ids:")
+    for rank, (score, idx) in enumerate(zip(top_logits, top_indices)):
+        token_str = tokenizer.decode([idx.item()])
+        print(f"{rank+1:2d}: token id {idx.item():5d}, logit {score.item():9.4f}, as text: '{token_str}'")
+
+    tokenized_samples = []
+    num_samples = len(ds)
+    print(num_samples)
+    for i in range(num_samples):  # Look at all samples
+        token = ds[i]["input_ids"][token_id]
+        print(f"Sample {i}: token id {token}, as text: '{tokenizer.decode([token]) if token is not None else 'None'}'")
+
+
+# %%
+analyze_logits(logits, 10)
+# %%
+
+x1 = torch.tensor(ds[[0]]["input_ids"], device=config.device)
+# %%
+logits = model(x1, torch.tensor([0.0], device=config.device))
+analyze_logits(logits, 10)
+# %%
+
+t = torch.tensor([0.01], device=config.device)
+rand_mask = (torch.rand_like(x1.float(), device=config.device) < t)
+xt = torch.where(rand_mask, x1, tokenizer.mask_token_id)
+print(xt)
+# %%
+logits = model(xt, t)
+analyze_logits(logits, 10)
+
+# %%
+
+x0 = torch.full((1, 50), tokenizer.mask_token_id, device=config.device)
+output = gf.forward_sample(x0, dt = 1e-4)
+# %%
+print(tokenizer.decode(output[0]))
 # %%

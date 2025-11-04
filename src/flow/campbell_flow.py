@@ -18,12 +18,12 @@ from flow.transformer import SmallModel, Config
 # %%
 
 class MaskedFMModel(nn.Module):
-    def __init__(self, config: Config, model):
+    def __init__(self, config: Config, model, mask_token_id = None):
         super().__init__()
         self.config = config
         self.model = model
         # num_input_tokens is the number of tokens in the vocabulary, including the mask token
-        self.mask_token_id = self.config.num_input_tokens - 1
+        self.mask_token_id = mask_token_id or self.config.num_input_tokens - 1
         # the model predicts the logits for tokens
 
     def sample_t(self, x1, t):
@@ -157,9 +157,14 @@ class UniformFMModel(nn.Module):
         # eta is stochasticity
         # the rate matrix is 1/(1 - t) from mask to unmasked
         # stochasticity eta is the rate matrix of given element back to mask
-        c = self.config.context_len
+        # Handle both batch size (int) and initial tensor
+        if isinstance(bs, torch.Tensor):
+            x = bs.clone()
+            bs = x.shape[0]
+        else:
+            c = self.config.context_len
+            x = torch.randint(0, self.config.num_tokens, (bs, c), device=self.config.device) # initial input
         s = self.config.num_tokens
-        x = torch.randint(0, self.config.num_tokens, (bs, c), device = self.config.device) # initial input
         t = 0
         while t < 1:
             logits = self.model(x, torch.full((bs,), t, device=self.config.device)) # (bs, c, s)

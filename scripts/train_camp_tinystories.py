@@ -10,10 +10,10 @@ from torch.utils.data import DataLoader, Dataset
 from datasets import load_dataset
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from tqdm import tqdm
+import wandb
 
-from flow.transformer import TimeAwareTransformer, IgnorantTransformer, Config
+from flow.transformer import IgnorantTransformer, Config
 from flow.campbell_flow import MaskedFMModel, UniformFMModel
-from flow.general_flow import GeneralFlow, WeightScheduler, DataSampler, NoiseSampler, LinearKappa, UsualFlow
 
 # %%
 tokenizer = AutoTokenizer.from_pretrained("roberta-base")
@@ -28,13 +28,11 @@ small_config = Config(
     context_len=384,
     num_layers=8,
     timestep_scale=1000.0,
-    output_channels=2,
     debug=True,
     add_residual=True,
     device="cuda" if torch.cuda.is_available() else "cpu",
     seed=42,
 )
-config = small_config
 large_config = Config(
     num_tokens=len(tokenizer),
     embed_dim=512,
@@ -43,14 +41,15 @@ large_config = Config(
     num_heads=8,
     head_dim=64,
     context_len=384,
-    num_layers=17,
+    num_layers=16,
     timestep_scale=1000.0,
-    output_channels=2,
     debug=True,
     add_residual=True,
     device="cuda" if torch.cuda.is_available() else "cpu",
     seed=42,
 )
+
+config = large_config
 
 torch.manual_seed(config.seed)
 torch.cuda.manual_seed(config.seed)
@@ -103,36 +102,67 @@ def test_dataloader():
 
 # %%
 
-# ok now time for a small train (to see overfitting)
-config = large_config
-subset_size = 10
+# subset_size = 10
+subset_size = None
 batch_size = 16
-save_path = f"/scratch/inath/datasets/tinystories_{subset_size}_dataset"
+save_path = f"/scratch/inath/datasets/tinystories_{subset_size or 'full'}_dataset"
 dataloader = make_tinystories_dataloader(
-    batch_size=min(batch_size, subset_size),
+    batch_size=min(batch_size, subset_size or float('inf')),
     num_proc=4,
     subset_size=subset_size,
     save_path=save_path if subset_size is not None else None
     )
 mask_token_id = tokenizer.mask_token_id
-model = TimeAwareTransformer(config)
+model = IgnorantTransformer(config)
 model.to(config.device)
-gf = UsualFlow(config, model)
+fm = MaskedFMModel(config, model, mask_token_id=mask_token_id)
+for param in model.parameters():
+    print(param.device)
+    break
 print("num params:", sum(p.numel() for p in model.parameters()))
 # %%
 # train the model
 
+# Initialize wandb
+wandb.init(
+    project="flow-tinystories",
+    name=f"campbell_flow_{subset_size or 'full'}",
+    config={
+        "model": "MaskedFMModel",
+        "subset_size": subset_size,
+        "batch_size": batch_size,
+        "total_steps": 100_000,
+        "lr": 1e-4,
+        "weight_decay": 1e-5,
+        "patience": 5_000,
+        "num_params": sum(p.numel() for p in model.parameters()),
+        "config": {
+            "embed_dim": config.embed_dim,
+            "mlp_dim": config.mlp_dim,
+            "num_heads": config.num_heads,
+            "head_dim": config.head_dim,
+            "context_len": config.context_len,
+            "num_layers": config.num_layers,
+        }
+    }
+)
+
 # early stopping
 best_loss = float('inf')
-patience = 5_000
+# patience = 5_000
 min_delta = 1e-5  # how small an improvement must be to count
+# steps_no_improve = 0
 
-optimizer = optim.AdamW(model.parameters(), lr=1e-5, weight_decay=1e-5)
-total_steps = 150_000
-# total_steps = 100
+optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
+total_steps = 100_000
+# total_steps = 1000
 num_warmup_steps = int(0.05 * total_steps)  # 5% warmup
 scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, total_steps)
 running_loss = 0.0
+
+save_path = "/scratch/inath/checkpoints/"
+save_interval = 2_000  # only check for saving every 500 steps
+last_save_step = 0
 
 pbar = tqdm(total=total_steps, desc="Training", dynamic_ncols=True, smoothing=0.1)
 
@@ -147,10 +177,9 @@ while step < total_steps:
 
         # Forward / backward
         x1 = batch["input_ids"].to(config.device)
-        x0 = torch.full_like(x1, mask_token_id)
-        t  = torch.rand(x1.shape[0], device=config.device)
 
-        loss = gf.get_train_loss(x0, x1, t)
+
+        loss = fm.get_train_loss(x1)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
@@ -163,6 +192,29 @@ while step < total_steps:
         mem_alloc = torch.cuda.memory_allocated() / 1024**2
         mem_resv = torch.cuda.memory_reserved() / 1024**2
 
+        # Early stopping
+        # Update best_loss whenever loss improves (tracking)
+        if loss.item() < best_loss - min_delta:
+            best_loss = loss.item()
+            # steps_no_improve = 0
+            # Only save model when save interval is met
+            if step - last_save_step >= save_interval:
+                torch.save(model.state_dict(), save_path + f"tinystories_campbell_flow_{subset_size or 'full'}_best_model.pt")
+                last_save_step = step
+        else:
+            # steps_no_improve += 1
+            pass
+        # Log to wandb
+        wandb.log({
+            "loss": loss.item(),
+            "avg_loss": avg_loss,
+            "best_loss": best_loss,
+            "learning_rate": lr,
+            "gpu_memory_allocated_mb": mem_alloc,
+            "gpu_memory_reserved_mb": mem_resv,
+            "step": step
+        })
+
         # tqdm update
         pbar.update(1)
         pbar.set_postfix({
@@ -172,31 +224,23 @@ while step < total_steps:
             "mem": f"{mem_alloc:.0f}/{mem_resv:.0f} MB"
         })
 
-        # Early stopping
-        if loss.item() < best_loss - min_delta:
-            best_loss = loss.item()
-            steps_no_improve = 0
-        else:
-            steps_no_improve += 1
-
-        if steps_no_improve >= patience:
-            pbar.write(f"\nEarly stopping at step {step} | best_loss={best_loss:.4f}")
-            step = total_steps  # force exit
-            break
+        # if steps_no_improve >= patience:
+        #     pbar.write(f"\nEarly stopping at step {step} | best_loss={best_loss:.4f}")
+        #     step = total_steps  # force exit
+        #     break
 pbar.close()
 print(f"Training complete at step {step:,} | best_loss={best_loss:.4f}")
-save_path = "/scratch/inath/checkpoints/"
-torch.save(model.state_dict(), save_path + f"tinystories_general_flow_{subset_size}_model.pt")
+torch.save(model.state_dict(), save_path + f"tinystories_campbell_flow_{subset_size or 'full'}_final_model.pt")
+wandb.finish()
     # %%
 
 # create some examples
-
-x0 = torch.full((1, 384), mask_token_id, device=config.device)
-result = gf.forward_sample(x0, dt = 1e-4)
+with torch.no_grad():
+    result = fm.sample(10, dt = 1e-3)  # batch_size=1, context_len is set in config
 print(tokenizer.decode(result[0].cpu().numpy()))
 # %%
-x0 = torch.full((1, 384), mask_token_id, device=config.device)
-result = gf.corrector_sample(x0, dt = 1e-4)
+with torch.no_grad():
+    result = fm.sample(10, eta = 10, dt = 1e-3)  # batch_size=1, context_len is set in config
 print(tokenizer.decode(result[0].cpu().numpy()))
 
 # %%

@@ -352,7 +352,7 @@ class GeneralFlow():
     def forward_sample(self, x0, dt = None):
         if dt is None:
             dt = getattr(self.config, "dt", 1e-3)
-        t = torch.tensor(0.)
+        t = torch.tensor(0., device=x0.device)
         x = x0.clone()
         while t < 1:
             x = self.forward_euler_step(x, t, dt)
@@ -362,13 +362,29 @@ class GeneralFlow():
     def corrector_sample(self, x0, dt = None):
         if dt is None:
             dt = getattr(self.config, "dt", 1e-3)
-        t = torch.tensor(1e-6) # start away from 0 so backward velocity is defined
+        t = torch.tensor(1e-6, device=x0.device) # start away from 0 so backward velocity is defined
         x = x0.clone()
         while t < 1:
             x = self.corrector_sampling_euler_step(x, t, dt)
             t += dt
         return x
+
+    def set_corrector_scheduler(self, corrector_scheduler: CorrectorScheduler):
+        self.corrector_scheduler = corrector_scheduler
     
+class UsualFlow(GeneralFlow):
+    """
+    Usual masked flow
+    """
+    def __init__(self, config: Config, model: nn.Module):
+        kappa1 = LinearKappa(config)
+        weight_scheduler = WeightScheduler(config, kappa1) # 2 kappas
+        samplers = [
+            DataSampler(config),
+            NoiseSampler(config)
+        ]
+        super().__init__(config, model, samplers, weight_scheduler)
+
 
 # %%
 

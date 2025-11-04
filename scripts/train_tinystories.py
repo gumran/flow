@@ -11,9 +11,9 @@ from datasets import load_dataset
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from tqdm import tqdm
 
-from flow.transformer import TimeAwareTransformer, Config
+from flow.transformer import TimeAwareTransformer, IgnorantTransformer, Config
 from flow.campbell_flow import MaskedFMModel, UniformFMModel
-from flow.general_flow import GeneralFlow, WeightScheduler, DataSampler, NoiseSampler, LinearKappa
+from flow.general_flow import GeneralFlow, WeightScheduler, DataSampler, NoiseSampler, LinearKappa, UsualFlow
 
 # %%
 tokenizer = AutoTokenizer.from_pretrained("roberta-base")
@@ -32,6 +32,7 @@ small_config = Config(
     debug=True,
     add_residual=True,
     device="cuda" if torch.cuda.is_available() else "cpu",
+    seed=42,
 )
 config = small_config
 large_config = Config(
@@ -48,37 +49,29 @@ large_config = Config(
     debug=True,
     add_residual=True,
     device="cuda" if torch.cuda.is_available() else "cpu",
+    seed=42,
 )
+
+torch.manual_seed(config.seed)
+torch.cuda.manual_seed(config.seed)
+torch.cuda.manual_seed_all(config.seed)
+# %%
+def test_tokenizer():
+    ds = load_dataset("roneneldan/TinyStories")
+    print(tokenizer.encode("Hello, world!"))
+    print(tokenizer.decode(tokenizer.encode("Hello, world!")))
+    print(ds['train'][0])
+    print(tokenizer.encode(ds['train'][0]['text']))
+    print(tokenizer.decode(tokenizer.encode(ds['train'][0]['text'])))
+    print(ds['train'][1])
+    print(tokenizer.encode(ds['train'][1]['text']))
+    print(tokenizer.decode(tokenizer.encode(ds['train'][1]['text'])))
+    print(ds['train'][2])
+    print(tokenizer.encode(ds['train'][2]['text']))
+    print(tokenizer.decode(tokenizer.encode(ds['train'][2]['text'])))
 # %%
 
-print(tokenizer.encode("Hello, world!"))
-print(tokenizer.decode(tokenizer.encode("Hello, world!")))
-# %%
-
-ds = load_dataset("roneneldan/TinyStories")
-print(ds)
-print(ds['train'][0])
-print(tokenizer.encode(ds['train'][0]['text']))
-print(tokenizer.decode(tokenizer.encode(ds['train'][0]['text'])))
-# %%
-
-print(ds['train'][1])
-print(tokenizer.encode(ds['train'][1]['text']))
-print(tokenizer.decode(tokenizer.encode(ds['train'][1]['text'])))
-# %%
-
-print(ds['train'][2])
-print(tokenizer.encode(ds['train'][2]['text']))
-print(tokenizer.decode(tokenizer.encode(ds['train'][2]['text'])))
-
-# %%
-
-# check number of tokens
-for i in range(100):
-    print(len(tokenizer.encode(ds['train'][i]['text'])))
-# %%
-
-def make_tinystories_dataloader(batch_size=8, num_proc=4, subset_size=None, tokenizer_name="roberta-base", block_size=384):
+def make_tinystories_dataloader(batch_size=8, num_proc=4, subset_size=None, tokenizer_name="roberta-base", block_size=384, save_path=None):
     ds = load_dataset("roneneldan/TinyStories", split="train")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     if tokenizer.pad_token is None:
@@ -91,7 +84,8 @@ def make_tinystories_dataloader(batch_size=8, num_proc=4, subset_size=None, toke
     ds = ds.map(tokenize_function, batched=True, num_proc=num_proc, remove_columns=["text"])
     if subset_size:
         ds = ds.select(range(subset_size))
-
+    if save_path is not None:
+        ds.save_to_disk(save_path)
     def collate_fn(batch):
         # convert list of dicts → dict of stacked tensors
         return {k: torch.stack([torch.tensor(x[k]) for x in batch]) for k in batch[0]}
@@ -101,43 +95,44 @@ def make_tinystories_dataloader(batch_size=8, num_proc=4, subset_size=None, toke
 # %%
 
 # test the dataloader
-dataloader = make_tinystories_dataloader(batch_size=8, num_proc=4)
-for batch in dataloader:
-    print(batch)
-    break
+def test_dataloader():
+    dataloader = make_tinystories_dataloader(batch_size=8, num_proc=4)
+    for batch in dataloader:
+        print(batch)
+        break
 
 # %%
 
 # ok now time for a small train (to see overfitting)
 config = large_config
+subset_size = 10
 batch_size = 16
-dataloader = make_tinystories_dataloader(batch_size=batch_size, num_proc=4, subset_size=100)
+save_path = f"/scratch/inath/datasets/tinystories_{subset_size}_dataset"
+dataloader = make_tinystories_dataloader(
+    batch_size=min(batch_size, subset_size),
+    num_proc=4,
+    subset_size=subset_size,
+    save_path=save_path if subset_size is not None else None
+    )
 mask_token_id = tokenizer.mask_token_id
 model = TimeAwareTransformer(config)
 model.to(config.device)
-kappa1 = LinearKappa(config)
-weight_scheduler = WeightScheduler(config, kappa1) # 2 kappas
-samplers = [
-    DataSampler(config),
-    NoiseSampler(config)
-]
-gf = GeneralFlow(config, model, samplers, weight_scheduler)
+gf = UsualFlow(config, model)
 print("num params:", sum(p.numel() for p in model.parameters()))
 # %%
 # train the model
 
 # early stopping
-# best_loss = float('inf')
+best_loss = float('inf')
 patience = 5_000
-# epochs_no_improve = 0
-min_delta = 1e-4  # how small an improvement must be to count
+min_delta = 1e-5  # how small an improvement must be to count
 
-optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
-# num_epochs = 250
+optimizer = optim.AdamW(model.parameters(), lr=1e-5, weight_decay=1e-5)
 total_steps = 150_000
-# num_training_steps = num_epochs * len(dataloader)
+# total_steps = 100
 num_warmup_steps = int(0.05 * total_steps)  # 5% warmup
 scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, total_steps)
+running_loss = 0.0
 
 pbar = tqdm(total=total_steps, desc="Training", dynamic_ncols=True, smoothing=0.1)
 
@@ -190,6 +185,8 @@ while step < total_steps:
             break
 pbar.close()
 print(f"Training complete at step {step:,} | best_loss={best_loss:.4f}")
+save_path = "/scratch/inath/checkpoints/"
+torch.save(model.state_dict(), save_path + f"tinystories_general_flow_{subset_size}_model.pt")
     # %%
 
 # create some examples

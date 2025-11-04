@@ -33,6 +33,7 @@ class Config:
     output_channels: int = 1                    # number of channels in the output
     add_residual: bool = False                  # add a residual kappa
     debug: bool = False                         # debug readouts
+    seed: int = 42                             # seed for reproducibility
 
     def __post_init__(self):
         if self.num_input_tokens is None:
@@ -251,7 +252,7 @@ class Transformer(nn.Module):
         self.embedding = nn.Embedding(config.num_input_tokens, config.embed_dim)
         self.positional_embedding = nn.Embedding(config.context_len, config.embed_dim)
         self.layers = nn.ModuleList([TransformerLayer(config) for _ in range(config.num_layers)])
-        self.unembedding = nn.Linear(config.embed_dim, config.num_tokens)
+        self.unembedding = nn.Linear(config.embed_dim, config.output_channels * config.num_tokens)
         self.final_layer_norm = LayerNorm(config)
 
     def forward(self, x):
@@ -264,7 +265,10 @@ class Transformer(nn.Module):
             x = layer(x)
         x = self.final_layer_norm(x)
         logits = self.unembedding(x) # (batch, seq, num_tokens)
-        return logits
+        if self.config.output_channels == 1:
+            return logits
+        else:
+            return logits.reshape(x.shape[0], x.shape[1], self.config.output_channels, self.config.num_tokens)
 
 class TimeAwareTransformer(nn.Module):
     """Transformer model that incorporates time information."""
@@ -297,6 +301,17 @@ class TimeAwareTransformer(nn.Module):
             return logits
         else:
             return logits.reshape(x.shape[0], x.shape[1], self.config.output_channels, self.config.num_tokens)
+
+class IgnorantTransformer(nn.Module):
+    """Wrapper around a Transformer model that ignores time information."""
+    def __init__(self, config: Config):
+        super().__init__()
+        self.config = config
+        self.transformer = Transformer(config)
+
+    def forward(self, x, t=None):
+        # x : (batch, seq)
+        return self.transformer(x)
 
 class SmallModel(nn.Module):
     """

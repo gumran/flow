@@ -13,7 +13,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 
-from flow.transformer import TimeAwareTransformer, Config
+from flow.transformer import TimeAwareTransformer, IgnorantTransformer, Config
 from flow.campbell_flow import MaskedFMModel, UniformFMModel
 from flow.general_flow import UsualFlow
 
@@ -44,9 +44,9 @@ large_config = Config(
     num_heads=8,
     head_dim=64,
     context_len=384,
-    num_layers=17,
+    num_layers=16,
     timestep_scale=1000.0,
-    output_channels=2,
+    # output_channels=2,
     debug=True,
     add_residual=True,
     device="cuda" if torch.cuda.is_available() else "cpu",
@@ -69,17 +69,17 @@ print(tokenizer.decode(ds['input_ids'][0]))
 
 # %%
 
-model_path = "/scratch/inath/checkpoints/tinystories_general_flow_10_model.pt"
-model = TimeAwareTransformer(config)
+model_path = "/scratch/inath/checkpoints/tinystories_campbell_flow_full_final_model.pt"
+model = IgnorantTransformer(config)
 model.load_state_dict(torch.load(model_path))
 model.to(config.device)
 model.eval()
-gf = UsualFlow(config, model)
+fm = MaskedFMModel(config, model)
 # %%
 
 with torch.no_grad():
     x0 = torch.full((20, 384), tokenizer.mask_token_id, device=config.device)
-    output = gf.forward_sample(x0)
+    output = fm.sample(20)
 # %%
 
 for i in range(20):
@@ -88,8 +88,7 @@ for i in range(20):
 # %%
 
 with torch.no_grad():
-    x0 = torch.full((20, 384), tokenizer.mask_token_id, device=config.device)
-    bad_output = gf.forward_sample(x0, dt = 1e-2)
+    bad_output = fm.sample(20, dt = 1e-2)
 # %%
 
 for i in range(20):

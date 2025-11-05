@@ -33,6 +33,7 @@ small_config = Config(
     device="cuda" if torch.cuda.is_available() else "cpu",
     seed=42,
 )
+
 large_config = Config(
     num_tokens=len(tokenizer),
     embed_dim=512,
@@ -102,20 +103,22 @@ def test_dataloader():
 
 # %%
 
-# subset_size = 10
-subset_size = None
+subset_size = 10
+# subset_size = None
 batch_size = 16
+# total_steps = 100_000
+total_steps = 25_000 # for partial subset training
 save_path = f"/scratch/inath/datasets/tinystories_{subset_size or 'full'}_dataset"
 dataloader = make_tinystories_dataloader(
     batch_size=min(batch_size, subset_size or float('inf')),
     num_proc=4,
     subset_size=subset_size,
-    save_path=save_path if subset_size is not None else None
+    save_path=save_path
     )
 mask_token_id = tokenizer.mask_token_id
 model = IgnorantTransformer(config)
 model.to(config.device)
-fm = MaskedFMModel(config, model, mask_token_id=mask_token_id)
+fm = MaskedFMModel(config, model)
 for param in model.parameters():
     print(param.device)
     break
@@ -126,12 +129,12 @@ print("num params:", sum(p.numel() for p in model.parameters()))
 # Initialize wandb
 wandb.init(
     project="flow-tinystories",
-    name=f"campbell_flow_{subset_size or 'full'}",
+    name=f"campbell_masked_flow_{subset_size or 'full'}",
     config={
         "model": "MaskedFMModel",
         "subset_size": subset_size,
         "batch_size": batch_size,
-        "total_steps": 100_000,
+        "total_steps": total_steps,
         "lr": 1e-4,
         "weight_decay": 1e-5,
         "patience": 5_000,
@@ -154,14 +157,12 @@ min_delta = 1e-5  # how small an improvement must be to count
 # steps_no_improve = 0
 
 optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
-total_steps = 100_000
-# total_steps = 1000
 num_warmup_steps = int(0.05 * total_steps)  # 5% warmup
 scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, total_steps)
 running_loss = 0.0
 
 save_path = "/scratch/inath/checkpoints/"
-save_interval = 2_000  # only check for saving every 500 steps
+save_interval = 2_000  # only check for saving every 2000 steps
 last_save_step = 0
 
 pbar = tqdm(total=total_steps, desc="Training", dynamic_ncols=True, smoothing=0.1)
@@ -199,7 +200,7 @@ while step < total_steps:
             # steps_no_improve = 0
             # Only save model when save interval is met
             if step - last_save_step >= save_interval:
-                torch.save(model.state_dict(), save_path + f"tinystories_campbell_flow_{subset_size or 'full'}_best_model.pt")
+                torch.save(model.state_dict(), save_path + f"tinystories_campbell_masked_flow_{subset_size or 'full'}_best_model.pt")
                 last_save_step = step
         else:
             # steps_no_improve += 1
@@ -230,7 +231,7 @@ while step < total_steps:
         #     break
 pbar.close()
 print(f"Training complete at step {step:,} | best_loss={best_loss:.4f}")
-torch.save(model.state_dict(), save_path + f"tinystories_campbell_flow_{subset_size or 'full'}_final_model.pt")
+torch.save(model.state_dict(), save_path + f"tinystories_campbell_masked_flow_{subset_size or 'full'}_final_model.pt")
 wandb.finish()
     # %%
 

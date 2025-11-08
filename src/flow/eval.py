@@ -5,9 +5,6 @@ Eval of discrete FM models.
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset
-from datasets import load_dataset, load_from_disk
 from transformers import AutoTokenizer, GPT2LMHeadModel, GPT2Tokenizer
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
@@ -16,7 +13,8 @@ import math
 import torch.nn.functional as F
 
 from flow.campbell_flow import MaskedFMModel
-from flow.transformer import Config, IgnorantTransformer
+from flow.transformer import IgnorantTransformer
+from flow.utils import Config
 
 # %%
 
@@ -63,8 +61,7 @@ def gpt2_model(device):
 
 def sentence_bert_model(device):
     model = SentenceTransformer(
-        'Qwen/Qwen3-Embedding-0.6B', 
-        model_kwargs={"attn_implementation": "flash_attention_2", "device_map": "auto"}).to(device)
+        'Qwen/Qwen3-Embedding-0.6B').to(device)
     return model
 
 # %%
@@ -180,28 +177,59 @@ class SentenceBERTEvaluator:
         self.cached_embeddings = None
 
     def cache_embeddings(self, texts: list[str]):
-        self.cached_embeddings = self.model.encode(texts, show_progress_bar=True) # (cached_size, emb_dim)
+        self.cached_embeddings = self.model.encode(texts, show_progress_bar=True, convert_to_tensor=True, device=self.device) # (cached_size, emb_dim)
 
-    def calculate_max_correlation_batch(self, new_sentences, model, top_k=1):
+    def calculate_max_correlation_batch(self, new_sentences, top_k=1):
         """
         Compute cosine similarity between new_sentences and cached reference embeddings.
         Return top_k matches and distances.
         """
         with torch.no_grad():
-            new_emb = model.encode(new_sentences, convert_to_tensor=True, device=self.device) # (bs, emb_dim)
+            new_emb = self.model.encode(new_sentences, convert_to_tensor=True, device=self.device) # (bs, emb_dim)
             correlation = self.model.similarity(new_emb, self.cached_embeddings) # (bs, cached_size)
         closest_idx = correlation.argmax(dim=1) # (bs,)
         return correlation.max(dim=1).values, closest_idx # (bs,), (bs,)
 
-    def calculate_distance_batch(self, new_sentences, model, top_k=1):
+    def calculate_distance_batch(self, new_sentences, top_k=1):
         """
         Compute distance between new_sentences and cached reference embeddings.
         Return top_k matches and distances.
         """
         with torch.no_grad():
-            new_emb = model.encode(new_sentences, convert_to_tensor=True, device=self.device)
+            new_emb = self.model.encode(new_sentences, convert_to_tensor=True, device=self.device)
             correlation = self.model.similarity(new_emb, self.cached_embeddings) # (bs, cached_size)
         closest_idx = correlation.argmax(dim=1) # (bs,)
         return 1 - correlation.max(dim=1).values, closest_idx # (bs,), (bs,)
+
+# %%
+
+def test_sentence_bert_evaluator():
+    evaluator = SentenceBERTEvaluator()
+    # evaluator.cache_embeddings(["The curious cat chased the butterfly around the garden."])
+    texts = [
+        "The curious cat chased the butterfly around the garden.",
+        "Children laughed as they built a tall snowman in the park.",
+        "A gentle breeze rustled the leaves on the old maple tree.",
+        "Sarah painted a colorful picture of her favorite horse.",
+        "The teacher smiled and handed out gold stars to the class.",
+        "Beneath the waves, the fish darted between the coral reefs.",
+        "Lucas practiced the piano every evening before dinner.",
+        "Thunder rumbled as dark clouds gathered over the hills.",
+        "Grandpa told stories while everyone roasted marshmallows.",
+    ]
+    evaluator.cache_embeddings(texts)
+    test_text = [
+        "The curious dog chased the butterfly around the garden. This is because the dog is curious and the butterfly is beautiful.",
+        "Lightning flashed as dark clouds gathered over the hills.",
+        "Johnny practiced the piano every evening before dinner.",
+        "Grandma told stories while the family roasted marshmallows.",
+    ]
+    print(evaluator.calculate_max_correlation_batch(test_text))
+    print(evaluator.calculate_distance_batch(test_text))
+
+# %%
+
+if __name__ == "__main__":
+    test_sentence_bert_evaluator()
 
 # %%

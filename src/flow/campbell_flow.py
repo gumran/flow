@@ -13,7 +13,8 @@ from torch.distributions.categorical import Categorical
 from tqdm import tqdm
 from dataclasses import dataclass
 
-from flow.transformer import SmallModel, Config
+from flow.transformer import SmallModel
+from flow.utils import Config, get_top_k_logits
 
 # %%
 
@@ -59,11 +60,15 @@ class MaskedFMModel(nn.Module):
         loss = F.cross_entropy(logits.transpose(1, 2), target, ignore_index=-1, reduction='mean') # don't calculate loss on unmasked
         return loss
 
-    def sample(self, bs, eta = None, dt = None):
+    def sample(self, bs, eta = None, dt = None, temperature = None, top_k = None):
         if eta is None:
             eta = getattr(self.config, "eta", 0.0)
         if dt is None:
             dt = getattr(self.config, "dt", 1e-3)
+        if temperature is None:
+            temperature = getattr(self.config, "temperature", 1.0)
+        if top_k is None:
+            top_k = getattr(self.config, "top_k", None)
         # eta is stochasticity
         # the rate matrix is 1/(1 - t) from mask to unmasked
         # stochasticity eta is the rate matrix of given element back to mask
@@ -72,7 +77,9 @@ class MaskedFMModel(nn.Module):
         t = 0
         while t < 1:
             logits = self.model(x, torch.full((bs,), t, device=self.config.device)) # (bs, c, s)
-            unmasked = Categorical(logits=logits).sample()
+            if top_k is not None:
+                logits = get_top_k_logits(logits, top_k)
+            unmasked = Categorical(logits=logits / temperature).sample()
             # probability of unmasked going back to mask is eta * dt
             # probability of mask going to unmasked is 1/(1 - t) * dt + eta t/(1 - t) * dt
             to_unmask = (torch.rand_like(x.float()) < (1 + eta * t) * dt / (1 - t)) \
@@ -149,11 +156,15 @@ class UniformFMModel(nn.Module):
         loss = F.cross_entropy(logits.transpose(1, 2), x, reduction='mean')
         return loss
 
-    def sample(self, bs, eta = None, dt = None):
+    def sample(self, bs, eta = None, dt = None, temperature = None, top_k = None):
         if eta is None:
             eta = getattr(self.config, "eta", 0.0)
         if dt is None:
             dt = getattr(self.config, "dt", 1e-3)
+        if temperature is None:
+            temperature = getattr(self.config, "temperature", 1.0)
+        if top_k is None:
+            top_k = getattr(self.config, "top_k", None)
         # eta is stochasticity
         # the rate matrix is 1/(1 - t) from mask to unmasked
         # stochasticity eta is the rate matrix of given element back to mask
@@ -168,7 +179,9 @@ class UniformFMModel(nn.Module):
         t = 0
         while t < 1:
             logits = self.model(x, torch.full((bs,), t, device=self.config.device)) # (bs, c, s)
-            pred_tokens = Categorical(logits=logits).sample()
+            if top_k is not None:
+                logits = get_top_k_logits(logits, top_k)
+            pred_tokens = Categorical(logits=logits / temperature).sample()
             rand_tokens = torch.randint_like(pred_tokens, self.config.num_tokens)
             # if we are at pred token, the prob of going to random token is eta * dt
             # flow between pred and a random other token is then eta * (t + (1-t)/S)

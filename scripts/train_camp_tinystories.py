@@ -12,7 +12,8 @@ from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from tqdm import tqdm
 import wandb
 
-from flow.transformer import IgnorantTransformer, Config
+from flow.transformer import IgnorantTransformer
+from flow.utils import Config
 from flow.campbell_flow import MaskedFMModel, UniformFMModel
 
 # %%
@@ -103,7 +104,7 @@ def test_dataloader():
 
 # %%
 
-subset_size = 10
+subset_size = 5
 # subset_size = None
 batch_size = 16
 # total_steps = 100_000

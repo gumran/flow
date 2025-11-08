@@ -12,9 +12,9 @@ from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from tqdm import tqdm
 import wandb
 
-from flow.transformer import IgnorantTransformer, Config
-from flow.campbell_flow import MaskedFMModel, UniformFMModel
-from flow.general_flow import GeneralFlow, WeightScheduler, DataSampler, NoiseSampler, LinearKappa, UsualFlow
+from flow.transformer import IgnorantTransformer, TimeAwareTransformer
+from flow.utils import Config
+from flow.general_flow import UsualFlow, QuadraticRandomFlow
 
 # %%
 tokenizer = AutoTokenizer.from_pretrained("roberta-base")
@@ -45,7 +45,7 @@ large_config = Config(
     context_len=384,
     num_layers=16,
     timestep_scale=1000.0,
-    output_channels=2,
+    output_channels=3,
     debug=True,
     add_residual=True,
     device="cuda" if torch.cuda.is_available() else "cpu",
@@ -117,9 +117,9 @@ dataloader = make_tinystories_dataloader(
     save_path=save_path if subset_size is not None else None
     )
 mask_token_id = tokenizer.mask_token_id
-model = IgnorantTransformer(config)
+model = TimeAwareTransformer(config)
 model.to(config.device)
-gf = UsualFlow(config, model)
+gf = QuadraticRandomFlow(config, model)
 print("num params:", sum(p.numel() for p in model.parameters()))
 # %%
 # train the model
@@ -127,9 +127,9 @@ print("num params:", sum(p.numel() for p in model.parameters()))
 # Initialize wandb
 wandb.init(
     project="flow-tinystories",
-    name=f"general_flow_{subset_size or 'full'}",
+    name=f"quadratic_random_flow_{subset_size or 'full'}",
     config={
-        "model": "UsualFlow",
+        "model": "QuadraticRandomFlow",
         "subset_size": subset_size,
         "batch_size": batch_size,
         "total_steps": 100_000,
@@ -218,7 +218,7 @@ while step < total_steps:
             best_loss = loss.item()
             steps_no_improve = 0
             if step - last_save_step >= save_interval:
-                torch.save(model.state_dict(), save_path + f"tinystories_general_flow_{subset_size or 'full'}_best_model.pt")
+                torch.save(model.state_dict(), save_path + f"tinystories_quadratic_random_flow_{subset_size or 'full'}_best_model.pt")
                 last_save_step = step
         else:
             steps_no_improve += 1
@@ -228,7 +228,7 @@ while step < total_steps:
         #     break
 pbar.close()
 print(f"Training complete at step {step:,} | best_loss={best_loss:.4f}")
-torch.save(model.state_dict(), save_path + f"tinystories_general_flow_{subset_size or 'full'}_final_model.pt")
+torch.save(model.state_dict(), save_path + f"tinystories_quadratic_random_flow_{subset_size or 'full'}_final_model.pt")
 wandb.finish()
 
 # create some examples

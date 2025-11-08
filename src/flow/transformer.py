@@ -13,31 +13,7 @@ import einops
 from dataclasses import dataclass
 import math
 
-
-@dataclass
-class Config:
-    num_tokens: int = 20                        # number of tokens in the vocabulary
-    embed_dim: int = 16                         # dimension of the embedding
-    mlp_dim: int = 32                           # dimension of the MLP
-    frequency_embedding_dim: int = 32           # dimension of the frequency embedding
-    num_heads: int = 4                          # number of heads in the attention
-    head_dim: int = 4                           # dimension of each head
-    context_len: int = 1024                     # maximum length of the context
-    num_layers: int = 6                         # number of layers in the transformer
-    timestep_scale: float = 1000.0              # how much to scale the timestep embedding
-    debug: bool = False                         # whether to print debug information
-    device: str = "cuda" \
-        if torch.cuda.is_available() \
-        else "cpu"                              # device to use
-    num_input_tokens: int = None                # number of input tokens, can be different from num_tokens (useful for masking, etc.)
-    output_channels: int = 1                    # number of channels in the output
-    add_residual: bool = False                  # add a residual kappa
-    debug: bool = False                         # debug readouts
-    seed: int = 42                             # seed for reproducibility
-
-    def __post_init__(self):
-        if self.num_input_tokens is None:
-            self.num_input_tokens = self.num_tokens
+from flow.utils import Config
 
 
 def generic_layer_test_with_shapes(layer_class, config, input_shapes, input_types=None, expected_shape=None, expected_output=None, compare_func=None, tol=1e-5):

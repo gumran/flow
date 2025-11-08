@@ -14,8 +14,8 @@ import einops
 from abc import ABC, abstractmethod
 import matplotlib.pyplot as plt
 
-from flow.transformer import Config, SmallModel, TimeAwareTransformer
-
+from flow.transformer import SmallModel, TimeAwareTransformer
+from flow.utils import Config
 
 # %%
 
@@ -56,6 +56,62 @@ class LinearKappa(Kappa):
     def derivative(self, t) -> torch.Tensor:
         return torch.ones_like(t)
 
+class CubicKappa(Kappa):
+    """
+    Cubic Kappa as in Gat et al.
+
+    parameters:
+    - alpha: derivative at t=0.
+    - beta: derivative at t=1.
+
+    Default initialisation corresponds to quadratic.
+    """
+    def __init__(self, config: Config, alpha = 0, beta = 2):
+        super().__init__(config)
+        self.alpha = alpha
+        self.beta = beta
+
+    def __call__(self, t) -> torch.Tensor:
+        approx = -2 * t.pow(3) + 3 * t.pow(2) \
+            + self.alpha * (t.pow(3) - 2 * t.pow(2) + t) \
+            + self.beta * (t.pow(3) - t.pow(2))
+        approx = torch.where(approx.abs() < 1e-6, torch.zeros_like(approx) + 1e-6, approx)
+        approx = torch.where(approx.abs() > 1 - 1e-6, torch.ones_like(approx), approx)
+        return approx
+
+    def derivative(self, t) -> torch.Tensor:
+        return -6 * t.pow(2) + 6 * t \
+            + self.alpha * (3 * t.pow(2) - 4 * t + torch.ones_like(t)) \
+            + self.beta * (3 * t.pow(2) - 2 * t)
+
+class InverseCubicKappa(Kappa):
+    """
+    Inverse cubic Kappa, where t becomes 1 - t.
+
+    parameters:
+    - alpha: negative derivative at t=1.
+    - beta: negative derivative at t=0.
+
+    Default initialisation corresponds to quadratic.
+    """
+    def __init__(self, config: Config, alpha = 0, beta = 2):
+        super().__init__(config)
+        self.alpha = alpha
+        self.beta = beta
+    
+    def __call__(self, t) -> torch.Tensor:
+        approx =  2 * t.pow(3) - 3 * t.pow(2) + torch.ones_like(t) \
+            + self.alpha * (t.pow(2) - t.pow(3)) \
+            - self.beta * (t.pow(3) - 2 * t.pow(2) + t)
+        approx = torch.where(approx.abs() < 1e-6, torch.zeros_like(approx) + 1e-6, approx)
+        approx = torch.where(approx.abs() > 1 - 1e-6, torch.ones_like(approx), approx)
+        return approx
+
+    def derivative(self, t) -> torch.Tensor:
+        return 6 * t.pow(2) - 6 * t \
+            + self.alpha * (2 * t - 3 * t.pow(2)) \
+            - self.beta * (3 * t.pow(2) - 4 * t + torch.ones_like(t))
+
 class ResidualKappa(Kappa):
     """
     Returns the weight of the residual term
@@ -65,10 +121,37 @@ class ResidualKappa(Kappa):
         self.kappas = args
 
     def __call__(self, t) -> torch.Tensor:
-        return torch.ones_like(t) - sum(kappa(t) for kappa in self.kappas)
+        approx = torch.ones_like(t) - sum(kappa(t) for kappa in self.kappas)
+        # round to 0 or 1 if close to 0 or 1 to avoid numerical issues
+        approx = torch.where(approx.abs() < 1e-6, torch.zeros_like(approx) + 1e-6, approx)
+        approx = torch.where(approx.abs() > 1 - 1e-6, torch.ones_like(approx), approx)
+        return approx
 
     def derivative(self, t) -> torch.Tensor:
         return -1 * sum([kappa.derivative(t) for kappa in self.kappas])
+
+def plot_kappa(kappa: Kappa):
+    """
+    Plot the Kappa function
+    """
+    t = torch.linspace(0, 1, 100)
+    plt.plot(t, kappa(t))
+    plt.title(f"Kappa: {kappa.__class__.__name__}")
+    plt.xlabel("t")
+    plt.ylabel("Kappa(t)")
+    plt.grid(True)
+    plt.show()
+
+def test_kappa():
+    config = Config()
+    kappa1 = CubicKappa(config, alpha = 0, beta = 2)
+    kappa2 = InverseCubicKappa(config, alpha = 0, beta = 2)
+    plot_kappa(kappa1)
+    plot_kappa(kappa2)
+    plot_kappa(ResidualKappa(config, kappa1, kappa2))
+
+if __name__ == "__main__":
+    test_kappa()
 
 class WeightScheduler():
     """
@@ -169,7 +252,7 @@ class Sampler(ABC):
         # x1 : (bs, c) or (...)
         pass
 
-class NoiseSampler(Sampler):
+class InitialSampler(Sampler):
 
     def __init__(self, config: Config):
         super().__init__(config)
@@ -187,6 +270,15 @@ class DataSampler(Sampler):
         # x0 : (bs, c) or (...)
         # x1 : (bs, c) or (...)
         return x1
+
+class RandomSampler(Sampler):
+    def __init__(self, config: Config):
+        super().__init__(config)
+
+    def sample(self, x0, x1):
+        # x0 : (bs, c) or (...)
+        # x1 : (bs, c) or (...)
+        return torch.randint(0, self.config.num_tokens, (x0.shape[0], x0.shape[1]), device=x0.device)
 
 # not really sure what other samplers we need
 
@@ -255,6 +347,13 @@ class GeneralFlow():
             sampler.sample(x0, x1) for sampler in self.samplers
         ], dim=-1) # (bs, c, m)
         weights = self.weight_scheduler(t).unsqueeze(1).expand(-1, self.config.context_len, -1) # (bs, c, m)
+        if weights.min() < 0:
+            if self.config.debug:
+                print(weights.min())
+                print("Negative weights found, clipping to 0 and renormalizing")
+            # Clip negative values to 0 (due to numerical rounding errors) and renormalize to sum to 1
+            weights = weights.clamp(min=0.0)
+            weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-8)  # renormalize to sum to 1
         which_probability_path = Categorical(weights).sample() # (bs, c)
         # some advanced indexing shenanigans to sample each token of xt from
         # path_samples according to the weights distribution
@@ -378,13 +477,29 @@ class UsualFlow(GeneralFlow):
     """
     def __init__(self, config: Config, model: nn.Module):
         kappa1 = LinearKappa(config)
+        assert config.add_residual, "Usual flow requires residual kappa"
         weight_scheduler = WeightScheduler(config, kappa1) # 2 kappas
         samplers = [
             DataSampler(config),
-            NoiseSampler(config)
+            InitialSampler(config)
         ]
         super().__init__(config, model, samplers, weight_scheduler)
 
+class QuadraticRandomFlow(GeneralFlow):
+    """
+    Quadratic random flow
+    """
+    def __init__(self, config: Config, model: nn.Module):
+        kappa1 = CubicKappa(config, alpha = 0, beta = 2)
+        kappa2 = InverseCubicKappa(config, alpha = 0, beta = 2)
+        assert config.add_residual, "Quadratic random flow requires residual kappa"
+        weight_scheduler = WeightScheduler(config, kappa1, kappa2) # 3 kappas
+        samplers = [
+            DataSampler(config),
+            InitialSampler(config),
+            RandomSampler(config)
+        ]
+        super().__init__(config, model, samplers, weight_scheduler)
 
 # %%
 
@@ -430,7 +545,7 @@ def test_general_flow():
     weight_scheduler = WeightScheduler(config, kappa1) # 2 kappas
     samplers = [
         DataSampler(config),
-        NoiseSampler(config)
+        InitialSampler(config)
     ]
     model = TimeAwareTransformer(config)
     gf = GeneralFlow(
@@ -471,7 +586,7 @@ def small_uniform_train():
     weight_scheduler = WeightScheduler(config, kappa1) # 2 kappas
     samplers = [
         DataSampler(config),
-        NoiseSampler(config)
+        InitialSampler(config)
     ]
     model = TimeAwareTransformer(config)
     gf = GeneralFlow(
@@ -496,7 +611,7 @@ def small_uniform_train():
         opt.step()
         wrapper.set_postfix_str(f"loss: {loss}")
         # print(loss)
-        losses.append(loss)
+        losses.append(loss.detach().cpu())
         last_100.append(loss)
         if (epoch + 1) % 100 == 0:
             print(f"mean of 100 losses: {sum(last_100) / 100}")
@@ -522,7 +637,7 @@ def small_mask_train():
     weight_scheduler = WeightScheduler(config, kappa1) # 2 kappas
     samplers = [
         DataSampler(config),
-        NoiseSampler(config)
+        InitialSampler(config)
     ]
     model = TimeAwareTransformer(config)
     gf = GeneralFlow(
@@ -549,7 +664,51 @@ def small_mask_train():
         scheduler.step()
         wrapper.set_postfix_str(f"loss: {loss:.4f}, lr: {scheduler.get_last_lr()[0]:.4f}")
         # print(loss)
-        losses.append(loss.detach())
+        losses.append(loss.detach().cpu())
+        last_100.append(loss)
+        if (epoch + 1) % 100 == 0:
+            print(f"mean of 100 losses: {sum(last_100) / 100:.4f}")
+            last_100.clear()
+
+    plt.plot(losses, label='loss')
+    plt.show()
+    x0 = basic_mask_sampler(bs, device)
+    print(gf.forward_sample(x0))
+
+    return model, gf
+
+# %%
+
+def small_quadratic_random_train():
+    config = Config(
+        num_tokens = 4,
+        context_len = 10,
+        add_residual=True,
+        output_channels = 3,
+        )
+    model = TimeAwareTransformer(config)
+    print(config.device)
+    model.to(config.device)
+    gf = QuadraticRandomFlow(config=config, model=model)
+    bs = 32
+    num_epochs = 10000
+    device = config.device
+    wrapper = tqdm(range(num_epochs))
+    opt = torch.optim.AdamW(model.parameters(), lr = 1e-4, weight_decay=0)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=num_epochs, eta_min=1e-6)
+    losses = []
+    last_100 = []
+    for epoch in wrapper:
+        x0 = basic_mask_sampler(bs, device)
+        x1 = basic_data_sampler(bs, device)
+        t = torch.rand((bs,), device=device)
+        loss = gf.get_train_loss(x0, x1, t)
+        loss.backward()
+        opt.step()
+        scheduler.step()
+        wrapper.set_postfix_str(f"loss: {loss:.4f}, lr: {scheduler.get_last_lr()[0]:.4f}")
+        # print(loss)
+        losses.append(loss.detach().cpu())
         last_100.append(loss)
         if (epoch + 1) % 100 == 0:
             print(f"mean of 100 losses: {sum(last_100) / 100:.4f}")
@@ -578,6 +737,16 @@ if __name__ == "__main__":
 if __name__ == "__main__":
     x = basic_mask_sampler(32, 'cpu')
     x = gf.corrector_sample(x, dt = 1e-4)
+
+    print(x)
+
+# %%
+if __name__ == "__main__":
+    model, gf = small_quadratic_random_train()
+
+    x = basic_mask_sampler(32, 'cuda')
+    for _ in range(10000):
+        x = gf.corrector_iteration_euler_step(x, torch.tensor(0.5, device=x.device), 1e-4)
 
     print(x)
 

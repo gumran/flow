@@ -60,7 +60,7 @@ class MaskedFMModel(nn.Module):
         loss = F.cross_entropy(logits.transpose(1, 2), target, ignore_index=-1, reduction='mean') # don't calculate loss on unmasked
         return loss
 
-    def sample(self, bs, eta = None, dt = None, temperature = None, top_k = None):
+    def sample(self, bs, eta = None, dt = None, temperature = None, top_k = None, t = 0):
         if eta is None:
             eta = getattr(self.config, "eta", 0.0)
         if dt is None:
@@ -72,9 +72,13 @@ class MaskedFMModel(nn.Module):
         # eta is stochasticity
         # the rate matrix is 1/(1 - t) from mask to unmasked
         # stochasticity eta is the rate matrix of given element back to mask
-        c = self.config.context_len
-        x = torch.full((bs, c), self.mask_token_id, device = self.config.device) # initial input
-        t = 0
+        # Handle both batch size (int) and initial tensor
+        if isinstance(bs, torch.Tensor):
+            x = bs.clone()
+            bs = x.shape[0]
+        else:
+            c = self.config.context_len
+            x = torch.full((bs, c), self.mask_token_id, device = self.config.device) # initial input
         while t < 1:
             logits = self.model(x, torch.full((bs,), t, device=self.config.device)) # (bs, c, s)
             if top_k is not None:

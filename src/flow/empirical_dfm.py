@@ -239,7 +239,7 @@ class EmpiricalDFM(nn.Module):
         probabilities[zero_idxs] = one_hot[zero_idxs].float()
         return probabilities
 
-    def sample(self, bs, eta = None, dt = None):
+    def sample(self, bs, eta = None, dt = None, tau = 1):
         if dt is None:
             dt = getattr(self.config, "dt", 1e-3)
         if eta is None:
@@ -254,7 +254,7 @@ class EmpiricalDFM(nn.Module):
             raise ValueError(f"Invalid initial type: {self.initial_type}")
         t = 0
         i = 0
-        while t < 1:
+        while t < tau:
             probabilities = self.calculate_probabilities(x, torch.full((bs,), t, device=self.config.device))
             pred_tokens = Categorical(probs=probabilities).sample()
             if self.initial_type == "mask":

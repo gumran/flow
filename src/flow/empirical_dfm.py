@@ -311,83 +311,85 @@ class EmpiricalDFM(nn.Module):
 
 # %%
 
-dataset_path = "/scratch/inath/datasets/tinystories_1000_dataset"
-dataset = load_from_disk(dataset_path).with_format("torch")
-# %%
+if __name__ == "__main__":
 
-dataloader = DataLoader(dataset, batch_size=10, shuffle=False)
-# %%
-for batch in dataloader:
-    print(batch)
-    break
-# %%
+    dataset_path = "/scratch/inath/datasets/tinystories_1000_dataset"
+    dataset = load_from_disk(dataset_path).with_format("torch")
+    # %%
 
-# %%
-tokenizer = AutoTokenizer.from_pretrained("roberta-base")
-mask_token_id = tokenizer.mask_token_id
-example_tokens = dataset[[420, 69, 67]]['input_ids']
-example_masked = example_tokens.clone()
-example_masked = torch.where(
-    torch.rand(example_masked.shape) < 0.993,
-    mask_token_id,
-    example_masked).to('cuda')
+    dataloader = DataLoader(dataset, batch_size=10, shuffle=False)
+    # %%
+    for batch in dataloader:
+        print(batch)
+        break
+    # %%
 
-
-# %%
-
-config = Config(
-    num_tokens=tokenizer.vocab_size,
-    context_len=384,
-)
+    # %%
+    tokenizer = AutoTokenizer.from_pretrained("roberta-base")
+    mask_token_id = tokenizer.mask_token_id
+    example_tokens = dataset[[420, 69, 67]]['input_ids']
+    example_masked = example_tokens.clone()
+    example_masked = torch.where(
+        torch.rand(example_masked.shape) < 0.993,
+        mask_token_id,
+        example_masked).to('cuda')
 
 
+    # %%
 
-# %%
-
-
-empirical_dfm = EmpiricalDFM(config, dataloader, mask_token_id)
-masked_probs = empirical_dfm.calculate_masked_probabilities(example_masked)
-print(masked_probs[0][1])
-nonzero_indices = torch.nonzero(masked_probs[0][1], as_tuple=True)
-print(nonzero_indices)
-print(masked_probs[0][1][nonzero_indices])
-max_index = masked_probs[0][1].argmax()
-print(max_index)
-print(tokenizer.decode(max_index)) # "Once"
-
-# %%
-
-example_uniformized = example_tokens.clone()
-random_tokens = torch.randint(0, tokenizer.vocab_size, example_tokens.shape)
-example_uniformized = torch.where(
-    torch.rand(example_uniformized.shape) < 0.995,
-    random_tokens,
-    example_uniformized).to('cuda')
+    config = Config(
+        num_tokens=tokenizer.vocab_size,
+        context_len=384,
+    )
 
 
-uniform_probs = empirical_dfm.calculate_uniform_probabilities(example_uniformized, torch.tensor([0.5]))
-token_number = 3
-print(uniform_probs[0][token_number])
-nonzero_indices = torch.nonzero(uniform_probs[0][token_number], as_tuple=True)
-print(nonzero_indices)
-print(uniform_probs[0][token_number][nonzero_indices])
-max_index = uniform_probs[0][token_number].argmax()
-print(max_index)
-print(tokenizer.decode(max_index)) # "Once"
 
-# %%
+    # %%
 
-empirical_dfm = EmpiricalDFM(config, dataloader, mask_token_id, initial_type="mask")
-example_sampled = empirical_dfm.sample(1, dt=0.001)
-display_decoded_tokens(example_sampled, tokenizer, "Sampled tokens")
-# %%
 
-empirical_dfm = EmpiricalDFM(config, dataloader, mask_token_id, initial_type="uniform")
-example_sampled = empirical_dfm.sample(1, dt=0.001)
-display_decoded_tokens(example_sampled, tokenizer, "Sampled tokens")
-# %%
+    empirical_dfm = EmpiricalDFM(config, dataloader, mask_token_id)
+    masked_probs = empirical_dfm.calculate_masked_probabilities(example_masked)
+    print(masked_probs[0][1])
+    nonzero_indices = torch.nonzero(masked_probs[0][1], as_tuple=True)
+    print(nonzero_indices)
+    print(masked_probs[0][1][nonzero_indices])
+    max_index = masked_probs[0][1].argmax()
+    print(max_index)
+    print(tokenizer.decode(max_index)) # "Once"
 
-empirical_dfm = EmpiricalDFM(config, dataloader, mask_token_id, initial_type="mask")
-example_sampled = empirical_dfm.one_at_a_time_sample(1)
-print(tokenizer.decode(example_sampled[0]))
-# %%
+    # %%
+
+    example_uniformized = example_tokens.clone()
+    random_tokens = torch.randint(0, tokenizer.vocab_size, example_tokens.shape)
+    example_uniformized = torch.where(
+        torch.rand(example_uniformized.shape) < 0.995,
+        random_tokens,
+        example_uniformized).to('cuda')
+
+
+    uniform_probs = empirical_dfm.calculate_uniform_probabilities(example_uniformized, torch.tensor([0.5]))
+    token_number = 3
+    print(uniform_probs[0][token_number])
+    nonzero_indices = torch.nonzero(uniform_probs[0][token_number], as_tuple=True)
+    print(nonzero_indices)
+    print(uniform_probs[0][token_number][nonzero_indices])
+    max_index = uniform_probs[0][token_number].argmax()
+    print(max_index)
+    print(tokenizer.decode(max_index)) # "Once"
+
+    # %%
+
+    empirical_dfm = EmpiricalDFM(config, dataloader, mask_token_id, initial_type="mask")
+    example_sampled = empirical_dfm.sample(1, dt=0.001)
+    display_decoded_tokens(example_sampled, tokenizer, "Sampled tokens")
+    # %%
+
+    empirical_dfm = EmpiricalDFM(config, dataloader, mask_token_id, initial_type="uniform")
+    example_sampled = empirical_dfm.sample(1, dt=0.001)
+    display_decoded_tokens(example_sampled, tokenizer, "Sampled tokens")
+    # %%
+
+    empirical_dfm = EmpiricalDFM(config, dataloader, mask_token_id, initial_type="mask")
+    example_sampled = empirical_dfm.one_at_a_time_sample(1)
+    print(tokenizer.decode(example_sampled[0]))
+    # %%

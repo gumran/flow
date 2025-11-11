@@ -27,7 +27,7 @@ small_config = Config(
     frequency_embedding_dim=128,
     num_heads=8,
     head_dim=16,
-    context_len=384,
+    context_len=32,
     num_layers=8,
     timestep_scale=1000.0,
     debug=True,
@@ -43,7 +43,7 @@ large_config = Config(
     frequency_embedding_dim=128,
     num_heads=8,
     head_dim=64,
-    context_len=384,
+    context_len=32,
     num_layers=16,
     timestep_scale=1000.0,
     debug=True,
@@ -128,7 +128,7 @@ def test_perplexity_evaluator():
 
     mask_token_id = tokenizer.mask_token_id
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model_path = "/scratch/inath/checkpoints/tinystories_campbell_flow_full_final_model.pt"
+    model_path = "/scratch/agumran/checkpoints/tinystories_campbell_masked_flow_1024_final_model.pt"
     model = IgnorantTransformer(config)
     model.load_state_dict(torch.load(model_path))
     model.to(device)

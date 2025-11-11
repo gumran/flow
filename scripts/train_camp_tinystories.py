@@ -106,7 +106,7 @@ def test_dataloader():
 
 # %%
 
-subset_size = 1024
+subset_size = 4096
 # subset_size = None
 batch_size = 128
 # total_steps = 100_000

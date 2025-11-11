@@ -81,7 +81,7 @@ print("Created EmpiricalDFM with initial_type='mask'")
 # %%
 
 # Load trained model
-model_path = "/scratch/inath/checkpoints/tinystories_campbell_flow_full_final_model.pt"
+model_path = "/scratch/agumran/checkpoints/tinystories_campbell_masked_flow_full_final_model.pt"
 print(f"\nLoading trained model from {model_path}...")
 model = IgnorantTransformer(config)
 model.load_state_dict(torch.load(model_path, map_location=config.device))

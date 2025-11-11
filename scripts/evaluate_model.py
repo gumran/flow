@@ -29,7 +29,7 @@ small_config = Config(
     frequency_embedding_dim=128,
     num_heads=8,
     head_dim=16,
-    context_len=384,
+    context_len=32,
     num_layers=8,
     timestep_scale=1000.0,
     output_channels=2,
@@ -45,7 +45,7 @@ large_config = Config(
     frequency_embedding_dim=128,
     num_heads=8,
     head_dim=64,
-    context_len=384,
+    context_len=32,
     num_layers=16,
     timestep_scale=1000.0,
     # output_channels=2,
@@ -87,7 +87,7 @@ def analyze_logits(logits, token_id):
 
 # %%
 
-dataset_path = "/scratch/inath/datasets/tinystories_10_dataset"
+dataset_path = "/scratch/agumran/datasets/32_tok_tinystories_1024_dataset"
 ds = load_from_disk(dataset_path)
 print(ds)
 # %%
@@ -97,7 +97,7 @@ print(tokenizer.decode(ds['input_ids'][0]))
 
 # %%
 
-model_path = "/scratch/inath/checkpoints/tinystories_campbell_flow_full_final_model.pt"
+model_path = "/scratch/agumran/checkpoints/tinystories_campbell_masked_flow_1024_final_model.pt"
 model = IgnorantTransformer(config)
 model.load_state_dict(torch.load(model_path))
 model.to(config.device)
@@ -105,7 +105,7 @@ model.eval()
 fm = MaskedFMModel(config, model)
 
 def analyze_logits(logits, token_id):
-    logits_values = logits[0, token_id, 0, :].detach().cpu().numpy()
+    logits_values = logits[0, token_id, :].detach().cpu().numpy()
     plt.figure(figsize=(10, 6))
     plt.hist(logits_values, bins=50)
     plt.title("Histogram of Logits")
@@ -115,7 +115,7 @@ def analyze_logits(logits, token_id):
     plt.show()
 
     topk = 20
-    logits_vector = logits[0, token_id, 0, :]
+    logits_vector = logits[0, token_id, :]
     top_logits, top_indices = torch.topk(logits_vector, topk)
     print("Top 20 logits and their token ids:")
     for rank, (score, idx) in enumerate(zip(top_logits, top_indices)):

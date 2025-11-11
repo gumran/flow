@@ -32,7 +32,7 @@ small_config = Config(
     timestep_scale=1000.0,
     debug=True,
     add_residual=True,
-    device="cuda" if torch.cuda.is_available() else "cpu",
+    device="cuda:2" if torch.cuda.is_available() else "cpu",
     seed=42,
 )
 
@@ -48,7 +48,7 @@ large_config = Config(
     timestep_scale=1000.0,
     debug=True,
     add_residual=True,
-    device="cuda" if torch.cuda.is_available() else "cpu",
+    device="cuda:2" if torch.cuda.is_available() else "cpu",
     seed=42,
 )
 
@@ -106,9 +106,9 @@ def test_dataloader():
 
 # %%
 
-subset_size = 4096
+subset_size = 16
 # subset_size = None
-batch_size = 128
+batch_size = 16
 # total_steps = 100_000
 save_path = f"/scratch/agumran/datasets/32_tok_tinystories_{subset_size or 'full'}_dataset"
 dataloader = make_tinystories_dataloader(

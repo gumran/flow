@@ -35,7 +35,7 @@ large_config = Config(
     timestep_scale=1000.0,
     debug=True,
     add_residual=True,
-    device="cuda" if torch.cuda.is_available() else "cpu",
+    device="cuda:2" if torch.cuda.is_available() else "cpu",
     seed=42,
 )
 config = large_config
@@ -68,7 +68,7 @@ def calculate_entropy(probabilities):
 # %%
 # Load trained model
 print("Loading trained model...")
-model_path = "/scratch/agumran/checkpoints/tinystories_campbell_masked_flow_1024_final_model.pt"
+model_path = "/scratch/agumran/checkpoints/tinystories_campbell_masked_flow_16_final_model.pt"
 model = IgnorantTransformer(config)
 model.load_state_dict(torch.load(model_path, map_location=config.device))
 model.to(config.device)
@@ -79,7 +79,7 @@ trained_fm = MaskedFMModel(config, model, mask_token_id=mask_token_id)
 # %%
 # Load dataset for EmpiricalDFM
 print("Loading dataset for EmpiricalDFM...")
-dataset_path = "/scratch/agumran/datasets/32_tok_tinystories_1024_dataset"
+dataset_path = "/scratch/agumran/datasets/32_tok_tinystories_16_dataset"
 dataset = load_from_disk(dataset_path).with_format("torch")
 dataloader = DataLoader(dataset, batch_size=10, shuffle=False)
 empirical_dfm = EmpiricalDFM(config, dataloader, mask_token_id=mask_token_id, 
@@ -88,7 +88,7 @@ empirical_dfm = EmpiricalDFM(config, dataloader, mask_token_id=mask_token_id,
 # %%
 # Get test examples
 print("Preparing test examples...")
-num_test_examples = 1024
+num_test_examples = 128
 test_indices = list(range(num_test_examples))
 test_tokens = torch.stack([dataset[i]['input_ids'].clone() for i in test_indices])
 test_tokens = test_tokens.to(config.device)
@@ -100,7 +100,7 @@ for i in range(num_test_examples):
 # %%
 # Analyze entropy evolution over time
 print("Analyzing entropy evolution...")
-timesteps = np.linspace(0, 1, 101)  # [0, 0.1, 0.2, ..., 1.0]
+timesteps = np.linspace(0, 1, 1001)  # [0, 0.001, 0.002, ..., 1.0]
 bs = test_tokens.shape[0]
 c = config.context_len
 

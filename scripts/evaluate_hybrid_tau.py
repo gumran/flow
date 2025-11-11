@@ -49,7 +49,7 @@ torch.cuda.manual_seed_all(config.seed)
 
 # %%
 # Load dataset
-dataset_path = "/scratch/agumran/datasets/32_tok_tinystories_1024_dataset"
+dataset_path = "/scratch/agumran/datasets/32_tok_tinystories_8192_dataset"
 print(f"Loading dataset from {dataset_path}...")
 dataset = load_from_disk(dataset_path).with_format("torch")
 print(f"Dataset loaded: {len(dataset)} examples")
@@ -100,7 +100,7 @@ print("Created EmpiricalDFM with initial_type='mask'")
 
 # %%
 # Load trained model
-model_path = "/scratch/agumran/checkpoints/tinystories_campbell_masked_flow_1024_final_model.pt"
+model_path = "/scratch/agumran/checkpoints/tinystories_campbell_masked_flow_8192_final_model.pt"
 print(f"\nLoading trained model from {model_path}...")
 model = IgnorantTransformer(config)
 model.load_state_dict(torch.load(model_path, map_location=config.device))

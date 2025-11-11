@@ -46,7 +46,7 @@ torch.cuda.manual_seed_all(config.seed)
 # %%
 
 # Load dataset
-dataset_path = "/scratch/inath/datasets/tinystories_10_dataset"
+dataset_path = "/scratch/agumran/datasets/32_tok_tinystories_16_dataset"
 print(f"Loading dataset from {dataset_path}...")
 dataset = load_from_disk(dataset_path).with_format("torch")
 print(f"Dataset loaded: {len(dataset)} examples")
@@ -64,7 +64,7 @@ print(f"Mask token ID: {mask_token_id}")
 # Create config for empirical DFM (needs num_tokens and context_len)
 empirical_config = Config(
     num_tokens=tokenizer.vocab_size,
-    context_len=384,
+    context_len=32,
     device=config.device,
     seed=42,
 )
@@ -81,7 +81,7 @@ print("Created EmpiricalDFM with initial_type='mask'")
 # %%
 
 # Load trained model
-model_path = "/scratch/agumran/checkpoints/tinystories_campbell_masked_flow_full_final_model.pt"
+model_path = "/scratch/agumran/checkpoints/tinystories_campbell_masked_flow_16_final_model.pt"
 print(f"\nLoading trained model from {model_path}...")
 model = IgnorantTransformer(config)
 model.load_state_dict(torch.load(model_path, map_location=config.device))

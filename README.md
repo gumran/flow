@@ -1,6 +1,6 @@
 # Discrete Flow Matching for Text Generation
 
-This repository contains an implementation of discrete flow matching techniques applied to text generation tasks, specifically focusing on the TinyStories dataset. The project explores the development and evaluation of discrete flow matching models, including experiments on hybrid flow matching approaches that combine empirical discrete flow matching with trained models.
+This repository contains an implementation of discrete flow matching (DFM) techniques applied to text generation tasks, specifically focusing on the TinyStories dataset. The project also includes scripts for several experiments on the generalisation properties of DFM.
 
 ## Project Overview
 
@@ -180,7 +180,6 @@ The project includes analysis of entropy evolution throughout the flow matching 
 
 - `figures/entropy_heatmap.png`: Entropy heatmap across positions and timesteps
 - `figures/entropy_vs_time_average.png`: Average entropy over time
-- `figures/entropy_vs_time_positions.png`: Entropy evolution at different positions
 - `figures/entropy_difference.png`: Difference between empirical and trained models
 
 Run the analysis:
@@ -211,17 +210,3 @@ This work builds upon the following foundational papers:
 
 2. **Campbell, A., et al. (2024).** Generative Flows on Discrete State-Spaces. *arXiv preprint arXiv:2402.04997*.  
    [Paper](https://arxiv.org/pdf/2402.04997)
-
-## Project Status
-
-This project is currently in the proof of concept/experimental phase. The implementation includes core discrete flow matching methods and initial experiments on the TinyStories dataset. Ongoing work includes:
-
-- Refining model architectures and training procedures
-- Conducting comprehensive evaluations of hybrid flow matching
-- Exploring different probability paths and schedulers
-- Analyzing the trade-offs between empirical and trained models
-
-## Acknowledgments
-
-We acknowledge the authors of the referenced papers for their foundational contributions to discrete flow matching and text generation. Their theoretical frameworks and algorithmic insights have been instrumental in guiding this implementation.
-

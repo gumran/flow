@@ -314,12 +314,13 @@ class GeneralFlow():
     """
     General flow model
     """
-    def __init__(self, config: Config, model: nn.Module, samplers: list[Sampler], weight_scheduler: WeightScheduler, corrector_scheduler: CorrectorScheduler = None):
+    def __init__(self, config: Config, model: nn.Module, samplers: list[Sampler], weight_scheduler: WeightScheduler, corrector_scheduler: CorrectorScheduler = None, temperature: float = 1.0):
         self.config = config
         self.weight_scheduler = weight_scheduler
         self.model = model
         self.samplers = samplers
         self.corrector_scheduler = corrector_scheduler
+        self.temperature = temperature
         if self.corrector_scheduler is None:
             self.corrector_scheduler = CorrectorScheduler(config)
         assert self.config.output_channels == self.weight_scheduler.m, f"output_channels must match the number of kappas"
@@ -373,6 +374,8 @@ class GeneralFlow():
             t = t.unsqueeze(0)
         # returns (bs, c, s): get the velocity to each token
         logits = self.model(x, t) # (bs, c, m, s)
+        # Apply temperature scaling
+        logits = logits / self.temperature
         probs = F.softmax(logits, dim=-1) # (bs, c, m, s)
         a = self.weight_scheduler.a(t) # (bs, m)
         velocity = torch.einsum("bm,bcms->bcs", a, probs) # (bs, c, s)
@@ -390,6 +393,8 @@ class GeneralFlow():
             t = t.unsqueeze(0)
         # returns (bs, c, s): get the velocity to each token
         logits = self.model(x, t) # (bs, c, m, s)
+        # Apply temperature scaling
+        logits = logits / self.temperature
         probs = F.softmax(logits, dim=-1) # (bs, c, m, s)
         a = self.weight_scheduler.a_backward(t) # (bs, m)
         velocity = torch.einsum("bm,bcms->bcs", a, probs) # (bs, c, s)
@@ -475,7 +480,7 @@ class UsualFlow(GeneralFlow):
     """
     Usual masked flow
     """
-    def __init__(self, config: Config, model: nn.Module):
+    def __init__(self, config: Config, model: nn.Module, temperature: float = 1.0):
         kappa1 = LinearKappa(config)
         assert config.add_residual, "Usual flow requires residual kappa"
         weight_scheduler = WeightScheduler(config, kappa1) # 2 kappas
@@ -483,13 +488,13 @@ class UsualFlow(GeneralFlow):
             DataSampler(config),
             InitialSampler(config)
         ]
-        super().__init__(config, model, samplers, weight_scheduler)
+        super().__init__(config, model, samplers, weight_scheduler, temperature=temperature)
 
 class QuadraticRandomFlow(GeneralFlow):
     """
     Quadratic random flow
     """
-    def __init__(self, config: Config, model: nn.Module):
+    def __init__(self, config: Config, model: nn.Module, temperature: float = 1.0):
         kappa1 = CubicKappa(config, alpha = 0, beta = 2)
         kappa2 = InverseCubicKappa(config, alpha = 0, beta = 2)
         assert config.add_residual, "Quadratic random flow requires residual kappa"
@@ -499,7 +504,7 @@ class QuadraticRandomFlow(GeneralFlow):
             InitialSampler(config),
             RandomSampler(config)
         ]
-        super().__init__(config, model, samplers, weight_scheduler)
+        super().__init__(config, model, samplers, weight_scheduler, temperature=temperature)
 
 # %%
 

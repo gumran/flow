@@ -160,7 +160,7 @@ entropies = defaultdict(float)
 def evaluate_samples(name, args):
     start_time = time.time()
     with torch.inference_mode():
-        while len(strings[name]) < 500:
+        while len(strings[name]) < 100:
             generated_sentences = fm.sample(10, **args)
             generated_texts = tokenizer.batch_decode(generated_sentences, skip_special_tokens=True)
             strings[name].extend(generated_texts)
@@ -186,7 +186,7 @@ with open("/scratch/inath/pickles/tinystories_campbell_uniform_flow_evaluation_r
 # %%
 
 # Test reading the pickle file and print its contents to verify the pickle
-with open("/scratch/inath/pickles/tinystories_campbell_flow_evaluation_results.pkl", "rb") as f:
+with open("/scratch/inath/pickles/tinystories_campbell_uniform_flow_evaluation_results.pkl", "rb") as f:
     loaded_results = pickle.load(f)
     print("Loaded pickle contents:")
     for k, v in loaded_results.items():
@@ -202,7 +202,7 @@ with open("/scratch/inath/pickles/tinystories_campbell_flow_evaluation_results.p
 import numpy as np
 
 # Load the results
-with open("/scratch/inath/pickles/tinystories_campbell_flow_evaluation_results.pkl", "rb") as f:
+with open("/scratch/inath/pickles/tinystories_campbell_uniform_flow_evaluation_results.pkl", "rb") as f:
     results = pickle.load(f)
 
 perplexities = results["perplexities"]

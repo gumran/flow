@@ -374,8 +374,8 @@ class GeneralFlow():
             t = t.unsqueeze(0)
         # returns (bs, c, s): get the velocity to each token
         logits = self.model(x, t) # (bs, c, m, s)
-        # Apply temperature scaling
-        logits = logits / self.temperature
+        # Apply temperature scaling only to the first index in the m dimension
+        logits[:, :, 0, :] = logits[:, :, 0, :] / self.temperature
         probs = F.softmax(logits, dim=-1) # (bs, c, m, s)
         a = self.weight_scheduler.a(t) # (bs, m)
         velocity = torch.einsum("bm,bcms->bcs", a, probs) # (bs, c, s)
@@ -393,8 +393,8 @@ class GeneralFlow():
             t = t.unsqueeze(0)
         # returns (bs, c, s): get the velocity to each token
         logits = self.model(x, t) # (bs, c, m, s)
-        # Apply temperature scaling
-        logits = logits / self.temperature
+        # Apply temperature scaling only to the first index in the m dimension
+        logits[:, :, 0, :] = logits[:, :, 0, :] / self.temperature
         probs = F.softmax(logits, dim=-1) # (bs, c, m, s)
         a = self.weight_scheduler.a_backward(t) # (bs, m)
         velocity = torch.einsum("bm,bcms->bcs", a, probs) # (bs, c, s)

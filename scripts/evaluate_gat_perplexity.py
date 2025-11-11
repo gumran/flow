@@ -1,9 +1,15 @@
 """
 Script to evaluate the perplexity of pre-trained GAT flow matching models
 (UsualFlow or QuadraticRandomFlow)
+
+Note: To reduce CUDA memory fragmentation, set the following environment variable
+before running this script:
+    export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 """
 
 # %%
+import os
+import gc
 import torch
 import torch.nn as nn
 from transformers import AutoTokenizer
@@ -27,7 +33,7 @@ def evaluate_entropy(text_samples, tokenizer):
     tokenizer: Huggingface tokenizer or similar
     Returns: average entropy per token position, computed over tokenized samples
     """
-    # Tokenize samples with tokenizer
+    # Tokenize samples with tokenizer (keep on CPU to save GPU memory)
     encodings = tokenizer(
         text_samples,
         return_tensors="pt",
@@ -38,6 +44,8 @@ def evaluate_entropy(text_samples, tokenizer):
     input_ids = encodings["input_ids"]  # shape: (num_samples, seq_len)
     if not torch.is_tensor(input_ids):
         input_ids = torch.tensor(input_ids)
+    # Ensure input_ids is on CPU to avoid GPU memory usage
+    input_ids = input_ids.cpu()
     # input_ids is (num_samples, seq_len)
     num_samples, seq_len = input_ids.shape
     entropies = []
@@ -83,10 +91,16 @@ def sample_from_gat_flow(
     # Create initial x0 - start from masked tokens
     x0 = torch.full((batch_size, config.context_len), mask_token_id, dtype=torch.long, device=device)
     
-    if use_corrector:
-        samples = flow_model.corrector_sample(x0, dt=dt)
-    else:
-        samples = flow_model.forward_sample(x0, dt=dt)
+    try:
+        if use_corrector:
+            samples = flow_model.corrector_sample(x0, dt=dt)
+        else:
+            samples = flow_model.forward_sample(x0, dt=dt)
+    except torch.cuda.OutOfMemoryError:
+        # If OOM, clear cache and try again
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        raise
     
     return samples
 
@@ -98,7 +112,7 @@ def evaluate_gat_perplexity(
     args_dict: Dict[str, Dict[str, Any]],
     mask_token_id: int,
     num_samples: int = 500,
-    batch_size: int = 10,
+    batch_size: int = 4,  # Conservative default; will auto-reduce on OOM
     output_path: str = None
 ) -> Dict[str, Any]:
     """
@@ -129,6 +143,17 @@ def evaluate_gat_perplexity(
         """Generate samples and evaluate for a given configuration."""
         start_time = time.time()
         
+        # Ensure model is in eval mode and gradients are disabled
+        model.eval()
+        for param in model.parameters():
+            param.grad = None
+        
+        # Clear cache before starting this configuration
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            # Optional: Print memory usage for debugging
+            # print(f"Before {name}: {torch.cuda.memory_allocated() / 1e9:.2f} GB allocated, {torch.cuda.memory_reserved() / 1e9:.2f} GB reserved")
+        
         # Extract parameters
         dt = args.get("dt", 0.01)
         temperature = args.get("temperature", 1.0)
@@ -152,6 +177,10 @@ def evaluate_gat_perplexity(
         
         with torch.inference_mode():
             while len(strings[name]) < num_samples:
+                # Clear cache before each batch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
                 # Generate samples
                 generated_sentences = sample_from_gat_flow(
                     flow_model,
@@ -161,18 +190,91 @@ def evaluate_gat_perplexity(
                     use_corrector=use_corrector,
                     **{k: v for k, v in args.items() if k not in ["dt", "temperature", "use_corrector", "corrector_alpha", "corrector_a", "corrector_b"]}
                 )
-                generated_texts = tokenizer.batch_decode(generated_sentences, skip_special_tokens=True)
+                # Move to CPU immediately and delete GPU tensor
+                generated_sentences_cpu = generated_sentences.cpu()
+                del generated_sentences
+                
+                # Debug: Check if generated sentences contain mask tokens (should be rare after generation)
+                if len(strings[name]) == 0:  # Only check first batch
+                    mask_count = (generated_sentences_cpu == mask_token_id).sum().item()
+                    total_tokens = generated_sentences_cpu.numel()
+                    if mask_count > 0:
+                        print(f"Warning: {mask_count}/{total_tokens} tokens are still mask tokens in first batch")
+                
+                generated_texts = tokenizer.batch_decode(generated_sentences_cpu, skip_special_tokens=True)
+                del generated_sentences_cpu
+                
+                # Debug: Check if decoded texts are valid (not empty, not just special tokens)
+                if len(strings[name]) == 0:  # Only check first batch
+                    sample_text = generated_texts[0] if generated_texts else ""
+                    print(f"Sample generated text (first batch, first sample): {repr(sample_text[:200])}")
+                    if not sample_text or len(sample_text.strip()) == 0:
+                        print("WARNING: Generated text is empty!")
+                
                 strings[name].extend(generated_texts)
+        
+        # Delete flow_model to free memory before evaluation
+        del flow_model
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         
         end_time = time.time()
         time_taken[name] = end_time - start_time
-        perplexities[name] = perplexity_evaluator.calculate_perplexity(strings[name])
+        
+        # Clear cache before perplexity evaluation (which uses GPT2 model)
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        # Use smaller batch size for perplexity evaluation to save memory
+        # Start with batch_size=4, reduce if OOM
+        ppl_batch_size = 4
+        try:
+            perplexities[name] = perplexity_evaluator.calculate_perplexity(strings[name], batch_size=ppl_batch_size)
+        except torch.cuda.OutOfMemoryError:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            # Try with even smaller batch size
+            ppl_batch_size = 2
+            try:
+                perplexities[name] = perplexity_evaluator.calculate_perplexity(strings[name], batch_size=ppl_batch_size)
+            except torch.cuda.OutOfMemoryError:
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                # Last resort: batch_size=1
+                perplexities[name] = perplexity_evaluator.calculate_perplexity(strings[name], batch_size=1)
+        
         entropies[name] = evaluate_entropy(strings[name], tokenizer)
+        
+        # Debug: Print some sample texts to verify they're valid
+        if len(strings[name]) > 0:
+            print(f"Sample texts for {name}:")
+            for i, text in enumerate(strings[name][:2]):  # Print first 2 samples
+                print(f"  [{i}]: {repr(text[:150])}")
+        
         print(f"{name}: perplexity={perplexities[name]:.2f}, entropy={entropies[name]:.2f}")
+        
+        # Clear strings from GPU memory if they were accidentally moved there
+        # (they should be CPU strings, but just in case)
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            # Synchronize to ensure all operations are complete
+            torch.cuda.synchronize()
+            # Optional: Print memory usage for debugging
+            # print(f"After {name}: {torch.cuda.memory_allocated() / 1e9:.2f} GB allocated, {torch.cuda.memory_reserved() / 1e9:.2f} GB reserved")
     
     # Evaluate for each configuration
     for name, args in tqdm(args_dict.items(), desc="Evaluating configurations"):
         evaluate_samples(name, args)
+        # Aggressive cleanup between configurations
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
     
     results = {
         "time_taken": dict(time_taken),
@@ -264,7 +366,7 @@ if __name__ == "__main__":
         head_dim=64,
         context_len=384,
         num_layers=16,
-        output_channels=2,
+        output_channels=3,
         timestep_scale=1000.0,
         debug=True,
         add_residual=True,
@@ -279,7 +381,8 @@ if __name__ == "__main__":
     
     # Load model and create flow
     # Example: Load a checkpoint and create UsualFlow or QuadraticRandomFlow
-    model_path = "/scratch/inath/checkpoints/tinystories_general_flow_full_final_model.pt"
+    # model_path = "/scratch/inath/checkpoints/tinystories_general_flow_full_final_model.pt"
+    model_path = "/scratch/inath/checkpoints/tinystories_quadratic_random_flow_full_final_model.pt"
     model = TimeAwareTransformer(config)
     
     # Load checkpoint and handle "transformer." prefix if present
@@ -298,11 +401,21 @@ if __name__ == "__main__":
     model.eval()
     # 
     # Choose flow type
-    flow_class = UsualFlow  # or QuadraticRandomFlow
+    # flow_class = UsualFlow  # or QuadraticRandomFlow
+    flow_class = QuadraticRandomFlow  # or QuadraticRandomFlow
     mask_token_id = tokenizer.mask_token_id
     
     # For demonstration, create a default args_dict
     args_dict = create_default_args_dict()
+    
+    # Set PyTorch CUDA memory allocator to use expandable segments to reduce fragmentation
+    # Note: This should ideally be set before importing torch, but setting it here
+    # may still help with fragmentation in some cases
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    
+    # Clear any existing cache before starting
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     
     # Uncomment to run evaluation:
     results = evaluate_gat_perplexity(
@@ -311,7 +424,7 @@ if __name__ == "__main__":
         flow_class=flow_class,
         args_dict=args_dict,
         mask_token_id=mask_token_id,
-        num_samples=500,
-        batch_size=10,
-        output_path="/scratch/inath/pickles/tinystories_general_flow_perplexity_results.pkl"
+        num_samples=100,
+        batch_size=5,  # Increased to better utilize GPU memory (~70% -> ~90-95%)
+        output_path="/scratch/inath/pickles/tinystories_quadratic_random_flow_perplexity_results.pkl"
     )
